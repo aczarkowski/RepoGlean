@@ -24,7 +24,8 @@ public sealed record CleanupRequest(
 public sealed record CleanupResult(
     IReadOnlyList<CleanupCandidateResult> Items,
     bool DryRun,
-    bool IsInterrupted)
+    bool IsInterrupted,
+    long SelectedCount)
 {
     public long DeletedCount => Items.LongCount(item => item.Outcome == CleanupOutcome.Deleted);
 

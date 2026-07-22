@@ -3,33 +3,13 @@ using DevCleaner.Scanning;
 
 namespace DevCleaner.Cleaning;
 
-internal interface ICleanupFileSystem
-{
-    FileAttributes GetAttributes(string path);
-
-    IReadOnlyList<string> GetFileSystemEntries(string path);
-
-    void DeleteFile(string path);
-
-    void DeleteDirectory(string path);
-}
-
-internal sealed class SystemCleanupFileSystem : ICleanupFileSystem
-{
-    public FileAttributes GetAttributes(string path) => File.GetAttributes(path);
-
-    public IReadOnlyList<string> GetFileSystemEntries(string path) => Directory.GetFileSystemEntries(path);
-
-    public void DeleteFile(string path) => File.Delete(path);
-
-    public void DeleteDirectory(string path) => Directory.Delete(path, recursive: false);
-}
-
 public sealed class CleanupService
 {
     private readonly GitClient git;
     private readonly FileTreeAnalyzer analyzer;
     private readonly ICleanupFileSystem fileSystem;
+    private readonly CleanupBoundaryInspector boundaryInspector;
+    private readonly QuarantineCleanup quarantineCleanup;
 
     public CleanupService(GitClient git)
         : this(git, null, null)
@@ -39,11 +19,21 @@ public sealed class CleanupService
     internal CleanupService(
         GitClient git,
         FileTreeAnalyzer? analyzer = null,
-        ICleanupFileSystem? fileSystem = null)
+        ICleanupFileSystem? fileSystem = null,
+        ICleanupMutationObserver? mutationObserver = null,
+        IFileSystemIdentityProvider? identityProvider = null)
     {
         this.git = git ?? throw new ArgumentNullException(nameof(git));
-        this.analyzer = analyzer ?? new FileTreeAnalyzer();
+        var resolvedIdentityProvider = identityProvider ?? new FileSystemIdentityProvider();
+        this.analyzer = analyzer ?? new FileTreeAnalyzer(resolvedIdentityProvider);
         this.fileSystem = fileSystem ?? new SystemCleanupFileSystem();
+        boundaryInspector = new CleanupBoundaryInspector(this.fileSystem);
+        quarantineCleanup = new QuarantineCleanup(
+            this.analyzer,
+            this.fileSystem,
+            mutationObserver ?? new NullCleanupMutationObserver(),
+            resolvedIdentityProvider,
+            boundaryInspector);
     }
 
     public async Task<CleanupResult> ExecuteAsync(
@@ -73,10 +63,10 @@ public sealed class CleanupService
 
             try
             {
-                var validationError = await ValidateAsync(candidate, requestedRoots, request.RuleCatalog, cancellationToken).ConfigureAwait(false);
-                if (validationError is not null)
+                var validation = await ValidateAsync(candidate, requestedRoots, request.RuleCatalog, cancellationToken).ConfigureAwait(false);
+                if (!validation.IsValid)
                 {
-                    results.Add(new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, validationError));
+                    results.Add(new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, validation.Error!));
                     continue;
                 }
 
@@ -86,8 +76,19 @@ public sealed class CleanupService
                     continue;
                 }
 
-                DeleteWithoutFollowingLinks(candidate.AbsolutePath, cancellationToken);
-                results.Add(new CleanupCandidateResult(candidate, CleanupOutcome.Deleted, "Deleted after safety revalidation."));
+                results.Add(quarantineCleanup.Execute(
+                    candidate,
+                    validation.RequestedRoot!,
+                    validation.CandidatePath!,
+                    validation.Identity!,
+                    validation.IsDirectory,
+                    cancellationToken));
+            }
+            catch (CleanupMutationInterruptedException exception)
+            {
+                results.Add(exception.Result);
+                interrupted = true;
+                break;
             }
             catch (OperationCanceledException)
             {
@@ -100,10 +101,10 @@ public sealed class CleanupService
             }
         }
 
-        return new CleanupResult(Array.AsReadOnly(results.ToArray()), request.DryRun, interrupted);
+        return new CleanupResult(Array.AsReadOnly(results.ToArray()), request.DryRun, interrupted, request.Candidates.Count);
     }
 
-    private async Task<string?> ValidateAsync(
+    private async Task<CandidateValidation> ValidateAsync(
         ArtifactCandidate candidate,
         IReadOnlyList<string> requestedRoots,
         DevCleaner.Rules.RuleCatalog ruleCatalog,
@@ -119,22 +120,22 @@ public sealed class CleanupService
             .FirstOrDefault();
         if (requestedRoot is null)
         {
-            return "Candidate is outside the requested root boundary.";
+            return CandidateValidation.Failure("Candidate is outside the requested root boundary.");
         }
 
         if (!RepositoryDiscovery.IsSameOrDescendant(candidatePath, repositoryRoot) ||
             string.Equals(candidatePath, repositoryRoot, PathComparison))
         {
-            return "Candidate is outside its repository root boundary.";
+            return CandidateValidation.Failure("Candidate is outside its repository root boundary.");
         }
 
-        var boundaryError = InspectBoundaryComponents(requestedRoot, candidatePath);
-        if (boundaryError is not null) return boundaryError;
+        var boundaryError = boundaryInspector.Inspect(requestedRoot, candidatePath);
+        if (boundaryError is not null) return CandidateValidation.Failure(boundaryError);
 
         var expectedPath = Path.GetFullPath(Path.Combine(repositoryRoot, candidate.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
         if (!string.Equals(candidatePath, expectedPath, PathComparison))
         {
-            return "Candidate absolute and repository-relative paths no longer identify the same location.";
+            return CandidateValidation.Failure("Candidate absolute and repository-relative paths no longer identify the same location.");
         }
 
         FileAttributes attributes;
@@ -144,12 +145,12 @@ public sealed class CleanupService
         }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
-            return $"Candidate no longer exists: {exception.Message}";
+            return CandidateValidation.Failure($"Candidate no longer exists: {exception.Message}");
         }
 
         if ((attributes & FileAttributes.ReparsePoint) != 0)
         {
-            return "Candidate is now a filesystem link, junction, or reparse point.";
+            return CandidateValidation.Failure("Candidate is now a filesystem link, junction, or reparse point.");
         }
 
         var currentAnalysis = analyzer.Analyze(candidatePath, repositoryRoot, cancellationToken);
@@ -158,29 +159,29 @@ public sealed class CleanupService
             var detail = currentAnalysis.Warnings.Count == 0
                 ? "Candidate failed filesystem safety analysis."
                 : string.Join(" ", currentAnalysis.Warnings.Select(warning => warning.Message));
-            return detail;
+            return CandidateValidation.Failure(detail);
         }
 
-        if (!HasSameStableIdentity(candidate.Identity, currentAnalysis.Identity))
+        if (!CleanupIdentity.HasSameStableIdentity(candidate.Identity, currentAnalysis.Identity))
         {
-            return "Candidate filesystem identity changed after the scan.";
+            return CandidateValidation.Failure("Candidate filesystem identity changed after the scan.");
         }
 
         var visiblePaths = await git.ListVisibleFilesAsync(repositoryRoot, cancellationToken).ConfigureAwait(false);
         var normalizedRelativePath = NormalizeRelativePath(candidate.RelativePath);
         if (await git.ContainsTrackedContentAsync(repositoryRoot, normalizedRelativePath, cancellationToken).ConfigureAwait(false))
         {
-            return "Candidate now contains tracked or otherwise visible content.";
+            return CandidateValidation.Failure("Candidate now contains tracked or otherwise visible content.");
         }
 
         if (!await git.IsIgnoredAsync(repositoryRoot, normalizedRelativePath, cancellationToken).ConfigureAwait(false))
         {
-            return "Git no longer reports the candidate as ignored.";
+            return CandidateValidation.Failure("Git no longer reports the candidate as ignored.");
         }
 
         if (ContainsVisibleContent(normalizedRelativePath, visiblePaths))
         {
-            return "Candidate now contains tracked or otherwise visible content.";
+            return CandidateValidation.Failure("Candidate now contains tracked or otherwise visible content.");
         }
 
         var rule = ruleCatalog.Rules.FirstOrDefault(ruleValue =>
@@ -190,68 +191,15 @@ public sealed class CleanupService
             ruleValue.IsActiveFor(visiblePaths));
         if (rule is null)
         {
-            return "The captured cleanup rule is no longer active and matching.";
+            return CandidateValidation.Failure("The captured cleanup rule is no longer active and matching.");
         }
 
-        return null;
+        return CandidateValidation.Success(
+            requestedRoot,
+            candidatePath,
+            currentAnalysis.Identity,
+            (attributes & FileAttributes.Directory) != 0);
     }
-
-    private string? InspectBoundaryComponents(string requestedRoot, string candidatePath)
-    {
-        var relativePath = Path.GetRelativePath(requestedRoot, candidatePath);
-        var currentPath = requestedRoot;
-        foreach (var component in new[] { string.Empty }.Concat(relativePath.Split(
-                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                     StringSplitOptions.RemoveEmptyEntries)))
-        {
-            if (component.Length > 0) currentPath = Path.Combine(currentPath, component);
-            FileAttributes attributes;
-            try
-            {
-                attributes = fileSystem.GetAttributes(currentPath);
-            }
-            catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
-            {
-                return $"Cleanup boundary component no longer exists: {exception.Message}";
-            }
-
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                return $"Cleanup boundary contains a filesystem link, junction, or reparse point: {currentPath}";
-            }
-        }
-
-        return null;
-    }
-
-    private void DeleteWithoutFollowingLinks(string path, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var attributes = fileSystem.GetAttributes(path);
-        if ((attributes & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new IOException($"Refusing to delete filesystem link or reparse point '{path}'.");
-        }
-
-        if ((attributes & FileAttributes.Directory) == 0)
-        {
-            fileSystem.DeleteFile(path);
-            return;
-        }
-
-        foreach (var entry in fileSystem.GetFileSystemEntries(path).OrderBy(value => value, PathComparer))
-        {
-            DeleteWithoutFollowingLinks(entry, cancellationToken);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        fileSystem.DeleteDirectory(path);
-    }
-
-    private static bool HasSameStableIdentity(FileSystemIdentity captured, FileSystemIdentity current) =>
-        captured.VolumeId == current.VolumeId &&
-        captured.FileId == current.FileId &&
-        string.Equals(captured.MountId, current.MountId, StringComparison.Ordinal);
 
     private static bool ContainsVisibleContent(string candidateRelativePath, IReadOnlyList<string> visiblePaths)
     {
@@ -266,4 +214,22 @@ public sealed class CleanupService
     private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private sealed record CandidateValidation(
+        bool IsValid,
+        string? Error,
+        string? RequestedRoot,
+        string? CandidatePath,
+        FileSystemIdentity? Identity,
+        bool IsDirectory)
+    {
+        public static CandidateValidation Failure(string error) => new(false, error, null, null, null, false);
+
+        public static CandidateValidation Success(
+            string requestedRoot,
+            string candidatePath,
+            FileSystemIdentity identity,
+            bool isDirectory) =>
+            new(true, null, requestedRoot, candidatePath, identity, isDirectory);
+    }
 }

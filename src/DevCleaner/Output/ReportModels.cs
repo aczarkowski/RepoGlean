@@ -172,7 +172,7 @@ public sealed record ReportDocument(
             Array.AsReadOnly(warnings),
             Array.AsReadOnly(errors),
             Cleanup: new CleanupSummaryReport(
-                result.Items.Count,
+                result.SelectedCount,
                 result.DeletedCount,
                 result.SkippedCount,
                 result.FailedCount,

@@ -65,10 +65,10 @@ public sealed class ReportWriterTests
         var candidate = new ArtifactCandidate("/repos/sample", "/repos/sample/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 5, identity);
         var validated = ReportDocument.FromCleanup(
             ["/repos"],
-            new CleanupResult([new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, "Validated; dry run did not delete the candidate.")], true, false));
+            new CleanupResult([new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, "Validated; dry run did not delete the candidate.")], true, false, 1));
         var rejected = ReportDocument.FromCleanup(
             ["/repos"],
-            new CleanupResult([new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, "Candidate filesystem identity changed after the scan.")], true, false));
+            new CleanupResult([new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, "Candidate filesystem identity changed after the scan.")], true, false, 1));
 
         Assert.Equal("success", validated.Status);
         Assert.Empty(validated.Warnings);

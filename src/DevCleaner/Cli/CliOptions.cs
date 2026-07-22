@@ -45,7 +45,10 @@ public sealed record CliOptions
         bool noColor,
         string? configPath,
         bool help,
-        bool version)
+        bool version,
+        bool quiet = false,
+        bool verbose = false,
+        bool noProgress = false)
     {
         Command = command;
         Roots = Freeze(roots);
@@ -63,6 +66,9 @@ public sealed record CliOptions
         ConfigPath = configPath;
         Help = help;
         Version = version;
+        Quiet = quiet;
+        Verbose = verbose;
+        NoProgress = noProgress;
     }
 
     public CommandKind Command { get; }
@@ -96,6 +102,12 @@ public sealed record CliOptions
     public bool Help { get; }
 
     public bool Version { get; }
+
+    public bool Quiet { get; }
+
+    public bool Verbose { get; }
+
+    public bool NoProgress { get; }
 
     private static IReadOnlyList<T> Freeze<T>(IReadOnlyList<T> values) => Array.AsReadOnly(values.ToArray());
 }

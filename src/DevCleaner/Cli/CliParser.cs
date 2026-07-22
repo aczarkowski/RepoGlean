@@ -21,6 +21,9 @@ public static class CliParser
         string? configPath = null;
         var help = false;
         var version = false;
+        var quiet = false;
+        var verbose = false;
+        var noProgress = false;
 
         for (var index = 0; index < arguments.Length; index++)
         {
@@ -61,6 +64,9 @@ public static class CliParser
                     case "--yes": yes = true; break;
                     case "--all": all = true; break;
                     case "--no-color": noColor = true; break;
+                    case "--quiet": quiet = true; break;
+                    case "--verbose": verbose = true; break;
+                    case "--no-progress": noProgress = true; break;
                     case "--help": help = true; break;
                     case "--version": version = true; break;
                     default: return ParseResult<CliOptions>.Failure($"Unknown option '{argument}'.");
@@ -146,7 +152,10 @@ public static class CliParser
             noColor,
             configPath,
             help,
-            version));
+            version,
+            quiet,
+            verbose,
+            noProgress));
     }
 
     private static bool TryReadValue(string[] arguments, ref int index, string option, out string value, out string error)

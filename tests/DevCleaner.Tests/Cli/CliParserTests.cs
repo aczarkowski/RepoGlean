@@ -60,13 +60,16 @@ public sealed class CliParserTests
     [Fact]
     public void Parse_accepts_global_flags_before_and_after_the_command()
     {
-        var result = CliParser.Parse(["--format", "json", "--no-color", "scan", "root", "--details"]);
+        var result = CliParser.Parse(["--format", "json", "--no-color", "--quiet", "scan", "root", "--details", "--verbose", "--no-progress"]);
 
         Assert.True(result.IsSuccess, result.Error);
         var options = result.Value!;
         Assert.Equal(OutputFormat.Json, options.OutputFormat);
         Assert.True(options.NoColor);
         Assert.True(options.Details);
+        Assert.True(options.Quiet);
+        Assert.True(options.Verbose);
+        Assert.True(options.NoProgress);
     }
 
     [Fact]

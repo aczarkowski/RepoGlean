@@ -12,7 +12,7 @@ public static class GlobMatcher
         return Regex.IsMatch(Normalize(repositoryRelativePath), ToRegex(Normalize(pattern)), RegexOptions.CultureInvariant);
     }
 
-    private static string Normalize(string value) => value.Replace('\\', '/').TrimStart('/').TrimStart('.', '/');
+    private static string Normalize(string value) => value.Replace('\\', '/');
 
     private static string ToRegex(string pattern)
     {

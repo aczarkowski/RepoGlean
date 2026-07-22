@@ -72,6 +72,7 @@ public sealed class ConfigLoaderTests : IDisposable
 
     [Theory]
     [InlineData("{\"schemaVersion\":2}", "schemaVersion")]
+    [InlineData("{\"schemaVersion\":1,\"customRules\":[{\"id\":\"x\",\"patterns\":[\"**/x\"]}]}", "category")]
     [InlineData("{\"schemaVersion\":1,\"customRules\":[{\"id\":\"bad id\",\"category\":\"Build\",\"patterns\":[\"**/x\"]}]}", "id")]
     [InlineData("{\"schemaVersion\":1,\"customRules\":[{\"id\":\"x\",\"category\":\"Logs\",\"patterns\":[\"**/x\"]}]}", "category")]
     [InlineData("{\"schemaVersion\":1,\"customRules\":[{\"id\":\"x\",\"category\":0,\"patterns\":[\"**/x\"]}]}", "category")]
@@ -83,6 +84,25 @@ public sealed class ConfigLoaderTests : IDisposable
 
         Assert.False(result.IsSuccess);
         Assert.Contains(errorPart, result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("/tmp/**")]
+    [InlineData("C:/temp/**")]
+    [InlineData("../../bin/**")]
+    [InlineData("./bin/**")]
+    [InlineData("src/./bin/**")]
+    [InlineData("src/../bin/**")]
+    public void Load_rejects_custom_patterns_that_are_not_repository_relative(string pattern)
+    {
+        var result = ConfigLoader.Load(Write($$"""
+            { "schemaVersion": 1, "customRules": [
+              { "id": "company.build", "category": "Build", "patterns": ["{{pattern}}"] }
+            ] }
+            """));
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("repository-relative", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

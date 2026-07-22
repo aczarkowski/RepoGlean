@@ -42,7 +42,9 @@ public static class ConfigLoader
         DevCleanerConfig? config;
         try
         {
-            config = JsonSerializer.Deserialize(File.ReadAllText(resolvedPath), JsonContext.DevCleanerConfig);
+            var json = File.ReadAllText(resolvedPath);
+            if (!HasRequiredCustomRuleProperties(json, out var propertyError)) return ConfigLoadResult.Failure(propertyError);
+            config = JsonSerializer.Deserialize(json, JsonContext.DevCleanerConfig);
         }
         catch (JsonException exception)
         {
@@ -113,6 +115,12 @@ public static class ConfigLoader
                 return false;
             }
 
+            if (rule.Patterns.Any(pattern => !IsRepositoryRelativePattern(pattern)))
+            {
+                error = $"Custom rule '{rule.Id}' patterns must be repository-relative and cannot contain '.' or '..' segments.";
+                return false;
+            }
+
             if (rule.Markers is null || rule.Markers.Any(string.IsNullOrWhiteSpace))
             {
                 error = $"Custom rule '{rule.Id}' has an empty marker pattern.";
@@ -134,5 +142,58 @@ public static class ConfigLoader
 
         error = string.Empty;
         return true;
+    }
+
+    private static bool HasRequiredCustomRuleProperties(string json, out string error)
+    {
+        using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip,
+        });
+
+        if (document.RootElement.ValueKind == JsonValueKind.Object &&
+            TryGetProperty(document.RootElement, "customRules", out var customRules) &&
+            customRules.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var rule in customRules.EnumerateArray())
+            {
+                if (rule.ValueKind == JsonValueKind.Object && !TryGetProperty(rule, "category", out _))
+                {
+                    error = "Each custom rule requires a category.";
+                    return false;
+                }
+            }
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static bool IsRepositoryRelativePattern(string pattern)
+    {
+        var normalized = pattern.Replace('\\', '/');
+        if (normalized.StartsWith("/", StringComparison.Ordinal) ||
+            (normalized.Length >= 2 && char.IsAsciiLetter(normalized[0]) && normalized[1] == ':'))
+        {
+            return false;
+        }
+
+        return !normalized.Split('/').Any(segment => segment is "." or "..");
     }
 }

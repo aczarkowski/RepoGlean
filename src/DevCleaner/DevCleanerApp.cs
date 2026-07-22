@@ -14,13 +14,24 @@ internal sealed record AppRuntime(
     string GitExecutable,
     string HomeDirectory,
     bool IsErrorInteractive,
-    bool IsOutputInteractive = false)
+    bool IsOutputInteractive = false,
+    IDriveRootProvider? DriveRootProvider = null)
 {
-    public static AppRuntime Create(TextWriter stderr) => new(
+    public static AppRuntime Create(TextWriter stdout, TextWriter stderr) => Create(
+        stdout,
+        stderr,
+        Console.IsOutputRedirected,
+        Console.IsErrorRedirected);
+
+    internal static AppRuntime Create(
+        TextWriter stdout,
+        TextWriter stderr,
+        bool isOutputRedirected,
+        bool isErrorRedirected) => new(
         "git",
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ReferenceEquals(stderr, Console.Error) && !Console.IsErrorRedirected,
-        !Console.IsOutputRedirected);
+        ReferenceEquals(stderr, Console.Error) && !isErrorRedirected,
+        ReferenceEquals(stdout, Console.Out) && !isOutputRedirected);
 }
 
 public static class DevCleanerApp
@@ -31,7 +42,7 @@ public static class DevCleanerApp
         TextWriter stdout,
         TextWriter stderr,
         CancellationToken cancellationToken = default) =>
-        RunAsync(arguments, input, stdout, stderr, AppRuntime.Create(stderr), cancellationToken);
+        RunAsync(arguments, input, stdout, stderr, AppRuntime.Create(stdout, stderr), cancellationToken);
 
     internal static async Task<int> RunAsync(
         string[] arguments,
@@ -161,7 +172,10 @@ public static class DevCleanerApp
 
         var showProgress = runtime.IsErrorInteractive && !options.NoProgress && !options.Quiet && options.OutputFormat != OutputFormat.Json;
         if (showProgress) await stderr.WriteLineAsync($"Scanning {roots.Count} root(s)...").ConfigureAwait(false);
-        var discovery = await new RepositoryDiscovery(git)
+        var discoveryService = runtime.DriveRootProvider is null
+            ? new RepositoryDiscovery(git)
+            : new RepositoryDiscovery(git, runtime.DriveRootProvider);
+        var discovery = await discoveryService
             .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
             .ConfigureAwait(false);
         var scanOptions = new ScanOptions(options.Repositories, options.Categories, exclusions, options.MinimumBytes);
@@ -173,7 +187,7 @@ public static class DevCleanerApp
             result = result with { Warnings = Array.AsReadOnly(discovery.Warnings.Concat(result.Warnings).ToArray()) };
         }
 
-        var report = ReportDocument.FromScan(roots, result);
+        var report = ReportDocument.FromScan(discovery.EffectiveRoots ?? roots, result);
         if (options.OutputFormat == OutputFormat.Json)
         {
             await JsonReportWriter.WriteAsync(report, stdout, cancellationToken).ConfigureAwait(false);

@@ -37,7 +37,8 @@ public sealed record ScanResult(
 
 public sealed record RepositoryDiscoveryResult(
     IReadOnlyList<string> Repositories,
-    IReadOnlyList<OperationWarning> Warnings);
+    IReadOnlyList<OperationWarning> Warnings,
+    IReadOnlyList<string>? EffectiveRoots = null);
 
 public sealed record ScanOptions(
     IReadOnlyList<string> RepositoryFilters,

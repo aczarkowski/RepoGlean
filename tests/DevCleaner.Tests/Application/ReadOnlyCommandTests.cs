@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DevCleaner.Scanning;
 using DevCleaner.Tests.Support;
 
 namespace DevCleaner.Tests.Application;
@@ -60,6 +61,29 @@ public sealed class ReadOnlyCommandTests
         var root = document.RootElement;
         Assert.Equal(repository.Path, root.GetProperty("effectiveRoots")[0].GetString());
         Assert.Equal(0, root.GetProperty("totals").GetProperty("candidateCount").GetInt64());
+    }
+
+    [Fact]
+    public async Task Scan_all_drives_reports_the_final_expanded_roots_in_json_and_table_output()
+    {
+        using var temporary = new TemporaryDirectory();
+        var requested = await CreateRepositoryAsync(temporary.GetPath("requested"), 3);
+        var fixedDrive = await CreateRepositoryAsync(temporary.GetPath("fixed-drive"), 5);
+        var driveRootProvider = new TestDriveRootProvider(fixedDrive.Path);
+
+        var json = await RunAsync(
+            ["scan", requested.Path, "--all-drives", "--format", "json"],
+            driveRootProvider: driveRootProvider);
+        var table = await RunAsync(
+            ["scan", requested.Path, "--all-drives"],
+            driveRootProvider: driveRootProvider);
+
+        Assert.Equal(0, json.ExitCode);
+        using var document = JsonDocument.Parse(json.Stdout);
+        Assert.Equal(
+            [requested.Path, fixedDrive.Path],
+            document.RootElement.GetProperty("effectiveRoots").EnumerateArray().Select(root => root.GetString()));
+        Assert.Contains($"Roots: {requested.Path}, {fixedDrive.Path}{Environment.NewLine}", table.Stdout);
     }
 
     [Fact]
@@ -164,6 +188,32 @@ public sealed class ReadOnlyCommandTests
     }
 
     [Fact]
+    public async Task Public_RunAsync_never_colors_a_custom_stdout_even_when_the_process_console_is_interactive()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"), 5);
+        using var input = new StringReader(string.Empty);
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var simulatedRuntime = AppRuntime.Create(
+            stdout,
+            stderr,
+            isOutputRedirected: false,
+            isErrorRedirected: false);
+        var exitCode = await DevCleanerApp.RunAsync(
+            ["scan", repository.Path],
+            input,
+            stdout,
+            stderr,
+            CancellationToken.None);
+
+        Assert.False(simulatedRuntime.IsOutputInteractive);
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("\u001b[", stdout.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Scan_maps_missing_git_no_candidates_partial_warnings_usage_and_interruption_to_exact_exit_codes()
     {
         using var temporary = new TemporaryDirectory();
@@ -204,15 +254,21 @@ public sealed class ReadOnlyCommandTests
         string[] arguments,
         string gitExecutable = "git",
         bool isErrorInteractive = false,
+        IDriveRootProvider? driveRootProvider = null,
         CancellationToken cancellationToken = default)
     {
         using var input = new StringReader(string.Empty);
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        var runtime = new AppRuntime(gitExecutable, Path.GetTempPath(), isErrorInteractive);
+        var runtime = new AppRuntime(gitExecutable, Path.GetTempPath(), isErrorInteractive, DriveRootProvider: driveRootProvider);
         var exitCode = await DevCleanerApp.RunAsync(arguments, input, stdout, stderr, runtime, cancellationToken);
         return new AppResult(exitCode, stdout.ToString(), stderr.ToString());
     }
 
     private sealed record AppResult(int ExitCode, string Stdout, string Stderr);
+
+    private sealed class TestDriveRootProvider(string root) : IDriveRootProvider
+    {
+        public DriveRootDiscoveryResult GetFixedDriveRoots() => new([root], []);
+    }
 }

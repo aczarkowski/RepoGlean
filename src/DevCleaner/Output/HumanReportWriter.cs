@@ -15,6 +15,7 @@ public static class HumanReportWriter
 
         if (!options.Quiet)
         {
+            output.WriteLine($"Roots: {string.Join(", ", report.EffectiveRoots)}");
             if (report.Totals.CandidateCount == 0)
             {
                 output.WriteLine("No candidates found.");

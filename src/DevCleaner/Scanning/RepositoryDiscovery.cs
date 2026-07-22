@@ -56,6 +56,11 @@ public sealed class RepositoryDiscovery
     {
     }
 
+    internal RepositoryDiscovery(GitClient git, IDriveRootProvider driveRootProvider)
+        : this(git, GetPlatformExclusions(), new FileSystemIdentityProvider(), driveRootProvider)
+    {
+    }
+
     internal RepositoryDiscovery(
         GitClient git,
         IReadOnlyList<string> implicitExclusions,
@@ -174,7 +179,8 @@ public sealed class RepositoryDiscovery
 
         return new RepositoryDiscoveryResult(
             Array.AsReadOnly(repositories.OrderBy(path => path, PathComparer).ToArray()),
-            Array.AsReadOnly(warnings.ToArray()));
+            Array.AsReadOnly(warnings.ToArray()),
+            Array.AsReadOnly(requestedRoots.ToArray()));
     }
 
     private bool IsImplicitlyExcluded(string path, string requestedRoot)

@@ -17,6 +17,7 @@ public sealed record ConfigLoadResult(DevCleanerConfig? Config, string? Error)
 public static class ConfigLoader
 {
     private static readonly DevCleanerJsonContext JsonContext = new(CreateSerializerOptions());
+    private static readonly HashSet<string> SchemaProperties = new(["schemaVersion", "roots", "excludes", "disabledRules", "customRules"], StringComparer.OrdinalIgnoreCase);
 
     public static string GetDefaultPath()
     {
@@ -152,9 +153,23 @@ public static class ConfigLoader
             CommentHandling = JsonCommentHandling.Skip,
         });
 
-        if (document.RootElement.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(document.RootElement, "customRules", out var customRules) &&
-            customRules.ValueKind == JsonValueKind.Array)
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        var seenProperties = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            if (SchemaProperties.Contains(property.Name) && !seenProperties.Add(property.Name))
+            {
+                error = $"Duplicate schema property '{property.Name}'.";
+                return false;
+            }
+        }
+
+        if (TryGetProperty(document.RootElement, "customRules", out var customRules) && customRules.ValueKind == JsonValueKind.Array)
         {
             foreach (var rule in customRules.EnumerateArray())
             {

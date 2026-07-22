@@ -122,6 +122,21 @@ public sealed class ConfigLoaderTests : IDisposable
         Assert.Contains("duplicate", duplicate.Error, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Load_rejects_duplicate_case_variant_custom_rules_before_deserializing()
+    {
+        var result = ConfigLoader.Load(Write("""
+            { "schemaVersion": 1,
+              "customRules": [{ "id": "company.first", "category": "Build", "patterns": ["**/first/**"] }],
+              "CustomRules": [{ "id": "company.effective", "patterns": ["**/effective/**"] }]
+            }
+            """));
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("duplicate", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("customRules", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);

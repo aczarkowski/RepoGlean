@@ -3,17 +3,48 @@ using DevCleaner.Rules;
 
 namespace DevCleaner.Scanning;
 
+internal interface IDriveRootProvider
+{
+    IReadOnlyList<string> GetFixedDriveRoots();
+}
+
+internal sealed class SystemDriveRootProvider : IDriveRootProvider
+{
+    public IReadOnlyList<string> GetFixedDriveRoots()
+    {
+        var roots = new List<string>();
+        foreach (var drive in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (drive.IsReady && drive.DriveType == DriveType.Fixed) roots.Add(drive.RootDirectory.FullName);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+            {
+            }
+        }
+
+        return roots;
+    }
+}
+
 public sealed class RepositoryDiscovery
 {
     private readonly GitClient git;
     private readonly IReadOnlyList<string> implicitExclusions;
+    private readonly IVolumeBoundary volumeBoundary;
+    private readonly IDriveRootProvider driveRootProvider;
 
     public RepositoryDiscovery(GitClient git)
-        : this(git, GetPlatformExclusions())
+        : this(git, GetPlatformExclusions(), new FileSystemIdentityProvider(), new SystemDriveRootProvider())
     {
     }
 
-    internal RepositoryDiscovery(GitClient git, IReadOnlyList<string> implicitExclusions)
+    internal RepositoryDiscovery(
+        GitClient git,
+        IReadOnlyList<string> implicitExclusions,
+        IVolumeBoundary? volumeBoundary = null,
+        IDriveRootProvider? driveRootProvider = null)
     {
         this.git = git ?? throw new ArgumentNullException(nameof(git));
         this.implicitExclusions = implicitExclusions
@@ -21,6 +52,8 @@ public sealed class RepositoryDiscovery
             .Select(Path.GetFullPath)
             .Distinct(PathComparer)
             .ToArray();
+        this.volumeBoundary = volumeBoundary ?? new FileSystemIdentityProvider();
+        this.driveRootProvider = driveRootProvider ?? new SystemDriveRootProvider();
     }
 
     public async Task<RepositoryDiscoveryResult> DiscoverAsync(
@@ -36,9 +69,7 @@ public sealed class RepositoryDiscovery
             .ToList();
         if (allDrives)
         {
-            requestedRoots.AddRange(DriveInfo.GetDrives()
-                .Where(drive => drive.IsReady && drive.DriveType == DriveType.Fixed)
-                .Select(drive => Path.GetFullPath(drive.RootDirectory.FullName)));
+            requestedRoots.AddRange(driveRootProvider.GetFixedDriveRoots().Select(Path.GetFullPath));
         }
 
         requestedRoots = requestedRoots.Distinct(PathComparer).ToList();
@@ -58,39 +89,74 @@ public sealed class RepositoryDiscovery
                 continue;
             }
 
-            await DiscoverRootAsync(root, root, configuredExclusions, repositories, warnings, cancellationToken).ConfigureAwait(false);
+            if (!volumeBoundary.TryGetVolumeId(root, out var rootVolumeId, out var rootVolumeError))
+            {
+                warnings.Add(new OperationWarning(root, rootVolumeError ?? "Unable to identify the scan root volume."));
+                continue;
+            }
+
+            var pending = new Stack<string>();
+            pending.Push(root);
+            while (pending.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var path = pending.Pop();
+                if (string.Equals(Path.GetFileName(path), ".git", StringComparison.OrdinalIgnoreCase) ||
+                    IsExcluded(path, root, configuredExclusions) ||
+                    IsImplicitlyExcluded(path, root))
+                {
+                    continue;
+                }
+
+                if (!TryGetAttributes(path, warnings, out var attributes)) continue;
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    warnings.Add(new OperationWarning(path, "Skipped directory link, junction, or reparse point."));
+                    continue;
+                }
+
+                if (!volumeBoundary.TryGetVolumeId(path, out var pathVolumeId, out var volumeError))
+                {
+                    warnings.Add(new OperationWarning(path, volumeError ?? "Unable to identify path volume."));
+                    continue;
+                }
+
+                if (pathVolumeId != rootVolumeId)
+                {
+                    warnings.Add(new OperationWarning(path, "Skipped path on a different filesystem volume."));
+                    continue;
+                }
+
+                if (Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git")))
+                {
+                    try
+                    {
+                        if (await git.IsWorkingTreeAsync(path, cancellationToken).ConfigureAwait(false)) repositories.Add(Path.GetFullPath(path));
+                    }
+                    catch (GitCommandException exception)
+                    {
+                        warnings.Add(new OperationWarning(path, exception.Message));
+                    }
+                }
+
+                try
+                {
+                    foreach (var child in Directory.EnumerateDirectories(path))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!string.Equals(Path.GetFileName(child), ".git", StringComparison.OrdinalIgnoreCase)) pending.Push(child);
+                    }
+                }
+                catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+                {
+                    warnings.Add(new OperationWarning(path, $"Unable to enumerate directory: {exception.Message}"));
+                }
+            }
         }
 
         return new RepositoryDiscoveryResult(
             Array.AsReadOnly(repositories.OrderBy(path => path, PathComparer).ToArray()),
             Array.AsReadOnly(warnings.ToArray()));
-    }
-
-    private async Task DiscoverRootAsync(
-        string path,
-        string currentRequestedRoot,
-        IReadOnlyList<string> configuredExclusions,
-        HashSet<string> repositories,
-        List<OperationWarning> warnings,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (string.Equals(Path.GetFileName(path), ".git", StringComparison.OrdinalIgnoreCase) ||
-            IsExcluded(path, currentRequestedRoot, configuredExclusions) ||
-            IsImplicitlyExcluded(path, currentRequestedRoot)) return;
-        if (!TryGetAttributes(path, warnings, out var attributes) || (attributes & FileAttributes.ReparsePoint) != 0) return;
-
-        if (Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git")))
-        {
-            if (await git.IsWorkingTreeAsync(path, cancellationToken).ConfigureAwait(false)) repositories.Add(Path.GetFullPath(path));
-        }
-
-        foreach (var child in EnumerateDirectories(path, warnings))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (string.Equals(Path.GetFileName(child), ".git", StringComparison.OrdinalIgnoreCase)) continue;
-            await DiscoverRootAsync(child, currentRequestedRoot, configuredExclusions, repositories, warnings, cancellationToken).ConfigureAwait(false);
-        }
     }
 
     private bool IsImplicitlyExcluded(string path, string requestedRoot)
@@ -125,19 +191,6 @@ public sealed class RepositoryDiscovery
         }
 
         return false;
-    }
-
-    private static IReadOnlyList<string> EnumerateDirectories(string path, List<OperationWarning> warnings)
-    {
-        try
-        {
-            return Directory.GetDirectories(path);
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-        {
-            warnings.Add(new OperationWarning(path, $"Unable to enumerate directory: {exception.Message}"));
-            return [];
-        }
     }
 
     private static bool TryGetAttributes(string path, List<OperationWarning> warnings, out FileAttributes attributes)

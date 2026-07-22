@@ -33,13 +33,23 @@ public sealed class RepositoryScanner
             cancellationToken.ThrowIfCancellationRequested();
             var repositoryRoot = Path.GetFullPath(repositoryRootValue);
             if (!MatchesRepositoryFilter(repositoryRoot, options.RepositoryFilters)) continue;
-            if (!await git.IsWorkingTreeAsync(repositoryRoot, cancellationToken).ConfigureAwait(false))
+            IReadOnlyList<string> visiblePaths;
+            try
             {
-                allWarnings.Add(new OperationWarning(repositoryRoot, "Path is not a Git working tree."));
+                if (!await git.IsWorkingTreeAsync(repositoryRoot, cancellationToken).ConfigureAwait(false))
+                {
+                    allWarnings.Add(new OperationWarning(repositoryRoot, "Path is not a Git working tree."));
+                    continue;
+                }
+
+                visiblePaths = await git.ListVisibleFilesAsync(repositoryRoot, cancellationToken).ConfigureAwait(false);
+            }
+            catch (GitCommandException exception)
+            {
+                allWarnings.Add(new OperationWarning(repositoryRoot, exception.Message));
                 continue;
             }
 
-            var visiblePaths = await git.ListVisibleFilesAsync(repositoryRoot, cancellationToken).ConfigureAwait(false);
             var activeRules = ruleCatalog.Rules
                 .Where(rule => options.CategoryFilters.Count == 0 || options.CategoryFilters.Contains(rule.Category))
                 .Where(rule => rule.IsActiveFor(visiblePaths))
@@ -138,7 +148,15 @@ public sealed class RepositoryScanner
                 }
 
                 var isDirectory = (attributes & FileAttributes.Directory) != 0;
-                if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    if (activeRules.Any(rule => rule.Matches(relativePath)))
+                    {
+                        warnings.Add(new OperationWarning(entry, "Skipped candidate filesystem link, junction, or reparse point."));
+                    }
+
+                    continue;
+                }
                 if (isDirectory && IsRepositoryBoundary(entry))
                 {
                     warnings.Add(new OperationWarning(entry, "Skipped nested repository boundary."));
@@ -146,7 +164,21 @@ public sealed class RepositoryScanner
                 }
 
                 var matchingRule = activeRules.FirstOrDefault(rule => rule.Matches(relativePath));
-                if (matchingRule is not null && await git.IsIgnoredAsync(repositoryRoot, relativePath, cancellationToken).ConfigureAwait(false))
+                bool isIgnored = false;
+                if (matchingRule is not null)
+                {
+                    try
+                    {
+                        isIgnored = await git.IsIgnoredAsync(repositoryRoot, relativePath, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (GitCommandException exception)
+                    {
+                        warnings.Add(new OperationWarning(entry, exception.Message));
+                        continue;
+                    }
+                }
+
+                if (matchingRule is not null && isIgnored)
                 {
                     if (ContainsVisibleContent(relativePath, visiblePaths))
                     {

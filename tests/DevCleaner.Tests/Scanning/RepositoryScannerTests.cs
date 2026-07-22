@@ -141,6 +141,63 @@ public sealed class RepositoryScannerTests
     }
 
     [Fact]
+    public async Task ScanAsync_rejects_an_entire_candidate_containing_a_nested_directory_link()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write("project.csproj", "<Project />");
+        repository.Write(".gitignore", "obj/\n");
+        repository.Write("obj/local.bin", "local");
+        var external = temporary.GetPath("external");
+        Directory.CreateDirectory(external);
+        File.WriteAllText(System.IO.Path.Combine(external, "external.bin"), "external");
+        try
+        {
+            Directory.CreateSymbolicLink(repository.GetPath("obj/nested-link"), external);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
+        {
+            return;
+        }
+        await repository.CommitAllAsync();
+
+        var result = await ScanAsync(new GitClient(), repository);
+
+        Assert.Empty(result.Repositories.Single().Candidates);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == repository.GetPath("obj/nested-link") &&
+            warning.Message.Contains("link", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ScanAsync_warns_when_a_matching_candidate_root_is_a_directory_link()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write("project.csproj", "<Project />");
+        repository.Write(".gitignore", "linked-obj/\n");
+        var external = temporary.GetPath("external");
+        Directory.CreateDirectory(external);
+        try
+        {
+            Directory.CreateSymbolicLink(repository.GetPath("linked-obj"), external);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
+        {
+            return;
+        }
+        await repository.CommitAllAsync();
+        var rule = new ArtifactRule("test.link", ArtifactCategory.Build, ["**/linked-obj", "**/linked-obj/**"], ["**/*.csproj"], true);
+
+        var result = await new RepositoryScanner(new GitClient()).ScanAsync([repository.Path], new RuleCatalog([rule]));
+
+        Assert.Empty(result.Repositories.Single().Candidates);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == repository.GetPath("linked-obj") &&
+            warning.Message.Contains("link", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ScanAsync_applies_repository_category_exclusion_and_minimum_size_filters_and_sorts_by_size()
     {
         using var temporary = new TemporaryDirectory();
@@ -181,7 +238,7 @@ public sealed class RepositoryScannerTests
     [Fact]
     public async Task GitClient_reports_a_clear_error_when_git_is_missing()
     {
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var exception = await Assert.ThrowsAsync<GitUnavailableException>(() =>
             new GitClient("devcleaner-definitely-missing-git").GetVersionAsync());
 
         Assert.Contains("Git executable", exception.Message, StringComparison.OrdinalIgnoreCase);
@@ -212,6 +269,49 @@ public sealed class RepositoryScannerTests
             new ProcessRunner("/bin/sh").RunAsync(["-c", "sleep 30 & wait"], null, cancellation.Token));
 
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Cancellation took {stopwatch.Elapsed}.");
+    }
+
+    [Fact]
+    public async Task ScanAsync_warns_for_a_check_ignore_failure_and_continues_with_other_candidates()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write("project.csproj", "<Project />");
+        repository.Write(".gitignore", "obj/\nsrc/obj/\n");
+        repository.Write("obj/fails.bin", "failure path");
+        repository.Write("src/obj/succeeds.bin", "unrelated");
+        await repository.CommitAllAsync();
+        var wrapper = temporary.GetPath("git-wrapper");
+        File.WriteAllText(wrapper, "#!/bin/sh\nif [ \"$3\" = \"check-ignore\" ] && [ \"$6\" = \"obj\" ]; then echo injected-check-ignore-failure >&2; exit 2; fi\nexec git \"$@\"\n");
+        File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var result = await ScanAsync(new GitClient(wrapper), repository);
+
+        var candidate = Assert.Single(result.Repositories.Single().Candidates);
+        Assert.Equal("src/obj", candidate.RelativePath);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == repository.GetPath("obj") &&
+            warning.Message.Contains("injected-check-ignore-failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScanAsync_warns_for_a_repository_git_failure_and_continues_with_other_repositories()
+    {
+        using var temporary = new TemporaryDirectory();
+        var valid = await CreateDotnetRepositoryAsync(temporary.GetPath("valid"), 10);
+        var broken = temporary.GetPath("broken");
+        Directory.CreateDirectory(broken);
+        File.WriteAllText(System.IO.Path.Combine(broken, ".git"), "gitdir: missing-git-directory\n");
+
+        var result = await new RepositoryScanner(new GitClient()).ScanAsync(
+            [broken, valid.Path], RuleCatalog.Create(DevCleanerConfig.Default));
+
+        var repository = Assert.Single(result.Repositories);
+        Assert.Equal(valid.Path, repository.RepositoryRoot);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == broken &&
+            warning.Message.Contains("rev-parse", StringComparison.OrdinalIgnoreCase));
     }
 
     private static Task<ScanResult> ScanAsync(GitClient git, GitTestRepository repository) =>

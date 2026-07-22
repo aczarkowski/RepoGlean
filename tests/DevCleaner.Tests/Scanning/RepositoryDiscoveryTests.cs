@@ -135,9 +135,72 @@ public sealed class RepositoryDiscoveryTests
         using var temporary = new TemporaryDirectory();
         Directory.CreateDirectory(temporary.GetPath("repo/.git"));
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var exception = await Assert.ThrowsAsync<GitUnavailableException>(() =>
             new RepositoryDiscovery(new GitClient("devcleaner-definitely-missing-git")).DiscoverAsync([temporary.Path]));
 
         Assert.Contains("Git executable", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_warns_and_continues_when_a_git_marker_is_broken()
+    {
+        using var temporary = new TemporaryDirectory();
+        var valid = await GitTestRepository.CreateAsync(temporary.GetPath("valid"));
+        var broken = temporary.GetPath("broken");
+        Directory.CreateDirectory(broken);
+        File.WriteAllText(System.IO.Path.Combine(broken, ".git"), "gitdir: missing-git-directory\n");
+
+        var result = await new RepositoryDiscovery(new GitClient()).DiscoverAsync([temporary.Path]);
+
+        Assert.Contains(valid.Path, result.Repositories);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == broken &&
+            warning.Message.Contains("rev-parse", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_does_not_cross_a_volume_boundary_below_a_root()
+    {
+        using var temporary = new TemporaryDirectory();
+        var sameVolume = await GitTestRepository.CreateAsync(temporary.GetPath("same-volume"));
+        var mounted = await GitTestRepository.CreateAsync(temporary.GetPath("mounted/foreign"));
+        var boundary = new TestVolumeBoundary(temporary.GetPath("mounted"));
+        var discovery = new RepositoryDiscovery(new GitClient(), [], boundary, new TestDriveRootProvider(temporary.Path));
+
+        var result = await discovery.DiscoverAsync([], allDrives: true);
+
+        Assert.Contains(sameVolume.Path, result.Repositories);
+        Assert.DoesNotContain(mounted.Path, result.Repositories);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == temporary.GetPath("mounted") &&
+            warning.Message.Contains("volume", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_honors_a_foreign_volume_when_it_is_the_explicit_root()
+    {
+        using var temporary = new TemporaryDirectory();
+        var mountedRoot = temporary.GetPath("mounted");
+        var repository = await GitTestRepository.CreateAsync(System.IO.Path.Combine(mountedRoot, "repo"));
+        var discovery = new RepositoryDiscovery(new GitClient(), [], new TestVolumeBoundary(mountedRoot));
+
+        var result = await discovery.DiscoverAsync([mountedRoot]);
+
+        Assert.Contains(repository.Path, result.Repositories);
+    }
+
+    private sealed class TestVolumeBoundary(string foreignRoot) : IVolumeBoundary
+    {
+        public bool TryGetVolumeId(string path, out ulong volumeId, out string? error)
+        {
+            volumeId = RepositoryDiscovery.IsSameOrDescendant(System.IO.Path.GetFullPath(path), System.IO.Path.GetFullPath(foreignRoot)) ? 2UL : 1UL;
+            error = null;
+            return true;
+        }
+    }
+
+    private sealed class TestDriveRootProvider(string root) : IDriveRootProvider
+    {
+        public IReadOnlyList<string> GetFixedDriveRoots() => [root];
     }
 }

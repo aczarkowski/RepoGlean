@@ -5,10 +5,9 @@ namespace DevCleaner.Scanning;
 public sealed record OperationWarning(string Path, string Message);
 
 public sealed record FileSystemIdentity(
+    ulong VolumeId,
+    ulong FileId,
     FileAttributes Attributes,
-    DateTime CreationTimeUtc,
-    DateTime LastWriteTimeUtc,
-    long Length,
     string? LinkTarget);
 
 public sealed record ArtifactCandidate(

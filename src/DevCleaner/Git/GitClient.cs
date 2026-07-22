@@ -1,5 +1,26 @@
 namespace DevCleaner.Git;
 
+public sealed class GitUnavailableException : InvalidOperationException
+{
+    public GitUnavailableException(string message)
+        : base(message)
+    {
+    }
+
+    public GitUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+public sealed class GitCommandException : InvalidOperationException
+{
+    public GitCommandException(string message)
+        : base(message)
+    {
+    }
+}
+
 public sealed class GitClient
 {
     private readonly ProcessRunner runner;
@@ -23,7 +44,7 @@ public sealed class GitClient
             ["-C", Path.GetFullPath(path), "rev-parse", "--is-inside-work-tree"],
             null,
             cancellationToken).ConfigureAwait(false);
-        if (result.ExitCode != 0) return false;
+        if (result.ExitCode != 0) throw CreateFailure(result, "git rev-parse");
         return string.Equals(result.StandardOutput.Trim(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -73,9 +94,9 @@ public sealed class GitClient
         if (result.ExitCode != 0) throw CreateFailure(result, operation);
     }
 
-    private static InvalidOperationException CreateFailure(ProcessResult result, string operation)
+    private static GitCommandException CreateFailure(ProcessResult result, string operation)
     {
         var detail = string.IsNullOrWhiteSpace(result.StandardError) ? "No diagnostic output was provided." : result.StandardError.Trim();
-        return new InvalidOperationException($"{operation} failed with exit code {result.ExitCode}: {detail}");
+        return new GitCommandException($"{operation} failed with exit code {result.ExitCode}: {detail}");
     }
 }

@@ -9,6 +9,18 @@ public sealed record FileTreeAnalysis(
 
 public sealed class FileTreeAnalyzer
 {
+    private readonly IFileSystemIdentityProvider identityProvider;
+
+    public FileTreeAnalyzer()
+        : this(new FileSystemIdentityProvider())
+    {
+    }
+
+    internal FileTreeAnalyzer(IFileSystemIdentityProvider identityProvider)
+    {
+        this.identityProvider = identityProvider;
+    }
+
     public FileTreeAnalysis Analyze(string path, string repositoryRoot, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -22,20 +34,40 @@ public sealed class FileTreeAnalyzer
             return new FileTreeAnalysis(false, 0, 0, null, warnings);
         }
 
-        if (!TryCaptureIdentity(fullPath, warnings, out var identity) || identity is null)
+        FileAttributes rootAttributes;
+        try
         {
+            rootAttributes = File.GetAttributes(fullPath);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            warnings.Add(new OperationWarning(fullPath, $"Unable to inspect candidate: {exception.Message}"));
             return new FileTreeAnalysis(false, 0, 0, null, warnings);
         }
 
-        if ((identity.Attributes & FileAttributes.ReparsePoint) != 0)
+        if ((rootAttributes & FileAttributes.ReparsePoint) != 0)
         {
             warnings.Add(new OperationWarning(fullPath, "Candidate is a filesystem link or reparse point."));
-            return new FileTreeAnalysis(false, 0, 0, identity, warnings);
+            return new FileTreeAnalysis(false, 0, 0, null, warnings);
+        }
+
+        if (!identityProvider.TryGetIdentity(fullPath, out var identity, out var identityError) || identity is null)
+        {
+            warnings.Add(new OperationWarning(fullPath, identityError ?? "Stable filesystem identity is unavailable."));
+            return new FileTreeAnalysis(false, 0, 0, null, warnings);
         }
 
         if ((identity.Attributes & FileAttributes.Directory) == 0)
         {
-            return new FileTreeAnalysis(true, 1, identity.Length, identity, warnings);
+            try
+            {
+                return new FileTreeAnalysis(true, 1, new FileInfo(fullPath).Length, identity, warnings);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+            {
+                warnings.Add(new OperationWarning(fullPath, $"Unable to read candidate file length: {exception.Message}"));
+                return new FileTreeAnalysis(false, 0, 0, identity, warnings);
+            }
         }
 
         long fileCount = 0;
@@ -77,7 +109,11 @@ public sealed class FileTreeAnalyzer
                     return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
                 }
 
-                if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    warnings.Add(new OperationWarning(entry, "Candidate contains a filesystem link or reparse point."));
+                    return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                }
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
                     pending.Push(entry);
@@ -98,24 +134,6 @@ public sealed class FileTreeAnalyzer
         }
 
         return new FileTreeAnalysis(true, fileCount, estimatedBytes, identity, warnings);
-    }
-
-    private static bool TryCaptureIdentity(string path, List<OperationWarning> warnings, out FileSystemIdentity? identity)
-    {
-        try
-        {
-            var attributes = File.GetAttributes(path);
-            FileSystemInfo info = (attributes & FileAttributes.Directory) != 0 ? new DirectoryInfo(path) : new FileInfo(path);
-            var length = info is FileInfo file ? file.Length : 0;
-            identity = new FileSystemIdentity(attributes, info.CreationTimeUtc, info.LastWriteTimeUtc, length, info.LinkTarget);
-            return true;
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-        {
-            warnings.Add(new OperationWarning(path, $"Unable to capture filesystem identity: {exception.Message}"));
-            identity = null;
-            return false;
-        }
     }
 
     internal static long SaturatingAdd(long left, long right) => right > 0 && left > long.MaxValue - right ? long.MaxValue : left + right;

@@ -40,11 +40,11 @@ internal sealed class ProcessRunner
         Process process;
         try
         {
-            process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Git executable '{executable}' could not be started.");
+            process = Process.Start(startInfo) ?? throw new GitUnavailableException($"Git executable '{executable}' could not be started.");
         }
         catch (Exception exception) when (exception is Win32Exception or FileNotFoundException)
         {
-            throw new InvalidOperationException($"Git executable '{executable}' was not found or could not be started.", exception);
+            throw new GitUnavailableException($"Git executable '{executable}' was not found or could not be started.", exception);
         }
 
         using (process)

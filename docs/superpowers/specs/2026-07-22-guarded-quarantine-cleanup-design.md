@@ -14,9 +14,10 @@ The move and the subsequent identity check form the ownership transition:
 
 1. Capture the expected candidate identity from scanning and revalidate its current identity and type.
 2. Create a GUID-named quarantine directory within the repository so the source and destination share a filesystem.
-3. Invoke the testable pre-move boundary, then atomically move the source path into quarantine.
-4. Re-capture the moved object's stable file, mount, and type identity.
-5. Permanently delete only when the moved identity matches the scan identity.
+3. Invoke the testable pre-move boundary, then re-capture the source stable identity, type, and mount. A mismatch fails before the move primitive is invoked.
+4. Atomically move the source path into quarantine with one no-copy native primitive: Linux `renameat2` with `RENAME_NOREPLACE`, macOS `renamex_np` with `RENAME_EXCL`, or Windows `MoveFileExW` without `MOVEFILE_COPY_ALLOWED` or replacement flags. Cross-volume and existing-destination moves fail rather than falling back to copy/delete or overwrite.
+5. Re-capture the moved object's stable file, mount, and type identity.
+6. Permanently delete only when the moved identity matches the scan identity.
 
 An ancestor or candidate swap before the move can cause a different object to move, but the post-move identity mismatch prevents its deletion. An ancestor swap that still resolves the original object cannot redirect subsequent deletion because deletion uses the independent quarantine path.
 
@@ -29,9 +30,9 @@ If the moved identity does not match, DevCleaner attempts recovery only when all
 - the original root and repository boundary is link-free and contained;
 - the reverse move succeeds atomically.
 
-Otherwise the object is left at its exact quarantine path. The candidate outcome is `Failed` and includes whether recovery succeeded or the stranded path. DevCleaner never deletes an identity-mismatched object.
+Otherwise the object is left at its exact quarantine path. The candidate outcome is `Failed` and includes whether recovery succeeded or the stranded path. Inspection, ACL, and I/O uncertainty inside recovery is contained as `Failed` and includes the exact payload path whenever payload presence cannot be excluded. Recovery uses the same no-copy native primitive as quarantine ownership. DevCleaner never deletes an identity-mismatched object.
 
-An empty quarantine directory is removed after each candidate. A non-empty or unremovable quarantine is retained and reported explicitly; it is never hidden as success.
+An empty quarantine directory is removed after each candidate. Identity, mount, cancellation, and atomic-move failures before ownership all merge any quarantine-removal failure and exact retained path into their result. A non-empty or unremovable quarantine is retained and reported explicitly; it is never hidden as success.
 
 ## Recursive deletion and links
 
@@ -41,7 +42,7 @@ The injected deletion boundary deterministically replaces a child directory with
 
 ## Cancellation and accounting
 
-Cancellation stops scheduling new candidates. A cancellation raised after a candidate has moved or after recursive deletion has partially mutated it records that candidate as `Failed` with an interrupted message and preserves all earlier results. CleanupResult separately records the original selected count, so JSON and human reports do not undercount candidates that were never scheduled after interruption.
+Cancellation stops scheduling new candidates. A cancellation raised after a candidate has moved or after recursive deletion has partially mutated it records that candidate as `Failed` with an interrupted message and preserves all earlier results. CleanupResult separately records the original selected count, so JSON and human reports print original selected and actually processed counts without undercounting candidates that were never scheduled after interruption.
 
 Cancellation before ownership leaves the source untouched where possible. Cancellation after ownership triggers identity-checked recovery when the quarantined object still exists; otherwise the report gives the exact stranded path or notes partial deletion.
 
@@ -54,6 +55,6 @@ The internal filesystem seam exposes deterministic callbacks at these boundaries
 - after ownership verification but before recursive deletion;
 - during the runtime deletion operation for cancellation simulation.
 
-Tests use real temporary Git repositories and real filesystem moves/links. They prove candidate swap, repository-ancestor symlink swap, child-directory-to-symlink swap, identity mismatch recovery/stranding, empty quarantine cleanup, mid-candidate cancellation accounting, preservation of completed outcomes, and stopping later candidates.
+Tests use real temporary Git repositories and real filesystem moves/links. They prove candidate swap, a file ancestor swap rejected before the mover while the exact outside bytes survive, native no-overwrite and injected move failure, repository-ancestor symlink swap, child-directory-to-symlink swap, identity mismatch recovery/stranding, recovery inspection uncertainty, empty-quarantine failure merging on every early branch, mid-candidate cancellation accounting, selected-versus-processed human reporting, preservation of completed outcomes, and stopping later candidates.
 
 Final acceptance requires focused cleanup tests, the full solution, Release warnings-as-errors, Native AOT publish, and a native cleanup smoke test against a disposable Git repository.

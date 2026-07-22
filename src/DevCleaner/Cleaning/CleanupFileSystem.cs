@@ -8,8 +8,6 @@ internal interface ICleanupFileSystem
 
     void CreateDirectory(string path);
 
-    void Move(string sourcePath, string destinationPath, bool isDirectory);
-
     void DeleteOwnedObject(string path, bool isDirectory, CancellationToken cancellationToken);
 
     void DeleteDirectory(string path);
@@ -20,12 +18,6 @@ internal sealed class SystemCleanupFileSystem : ICleanupFileSystem
     public FileAttributes GetAttributes(string path) => File.GetAttributes(path);
 
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
-
-    public void Move(string sourcePath, string destinationPath, bool isDirectory)
-    {
-        if (isDirectory) Directory.Move(sourcePath, destinationPath);
-        else File.Move(sourcePath, destinationPath);
-    }
 
     public void DeleteOwnedObject(string path, bool isDirectory, CancellationToken cancellationToken)
     {

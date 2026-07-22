@@ -125,3 +125,41 @@ Expected: zero failures, zero warnings, successful Native AOT generation, and a 
 - [x] **Step 5: Commit and append evidence**
 
 Commit the implementation and tests, then append exact RED/GREEN/full/Release/AOT/native-smoke evidence and commit hashes to `.superpowers/sdd/task-5-report.md`.
+
+### Task 3: Final review hardening
+
+**Files:**
+- Create: `src/DevCleaner/Cleaning/AtomicFileMover.cs`
+- Modify: `src/DevCleaner/Cleaning/CleanupFileSystem.cs`
+- Modify: `src/DevCleaner/Cleaning/QuarantineCleanup.cs`
+- Modify: `src/DevCleaner/Output/HumanReportWriter.cs`
+- Modify: `tests/DevCleaner.Tests/Cleaning/CleanupServiceTests.cs`
+- Modify: `tests/DevCleaner.Tests/Output/ReportWriterTests.cs`
+
+**Interfaces:**
+- Consumes: stable filesystem identities, the GUID-private quarantine, and existing mutation observers.
+- Produces: `IAtomicFileMover.MoveNoCopy` backed by Linux `renameat2`, macOS `renamex_np`, or Windows `MoveFileExW` without `MOVEFILE_COPY_ALLOWED`; failure messages which retain the exact possible payload path; cleanup-failure merging on every early exit; and a human summary containing original selected and processed counts.
+
+- [x] **Step 1: Write failing native-move and post-observer identity tests**
+
+Add injected mover tests proving that an ancestor swap to a different mount/identity fails before the native move is invoked, the outside file remains byte-for-byte intact, and a mover failure leaves the source present while producing `Failed`. Verify RED because the current observer boundary does not recheck identity and `File.Move`/`Directory.Move` provide no explicit no-copy contract.
+
+- [x] **Step 2: Implement one no-copy atomic move primitive**
+
+Replace the file/directory split move with one native primitive. On Linux call `renameat2(..., RENAME_NOREPLACE)`, on macOS call `renamex_np(..., RENAME_EXCL)`, and surface `errno`, including `EXDEV`, without a copy fallback. On Windows call `MoveFileExW(source, destination, MOVEFILE_WRITE_THROUGH)` without `MOVEFILE_COPY_ALLOWED` or replacement flags. Require a nonexistent destination and fail safely if it already exists. Recheck source identity, type, and mount immediately after `BeforeQuarantineMove`; retain the mandatory post-move stable identity check. Use this same primitive for identity-checked recovery.
+
+- [x] **Step 3: Write failing recovery-inspection and quarantine-cleanup tests**
+
+Inject boundary inspection failure after ownership transfer and assert the candidate result is `Failed` and contains the exact `destinationPath`. Inject empty-quarantine removal failures on representative early identity, mount, cancellation, and move-failure branches and assert the final message contains the quarantine path and cleanup error. Verify RED because recovery inspection exceptions currently escape and early branches discard `TryRemoveEmptyQuarantine` failures.
+
+- [x] **Step 4: Make recovery and early-return accounting total**
+
+Catch identity, ACL, and I/O uncertainty inside `RecoverOrStrand` and always return `Failed` with the exact `destinationPath` whenever payload presence cannot be excluded. Route every pre-ownership early result and exception through one helper which attempts empty-quarantine removal and appends the exact quarantine path/error when removal is not confirmed.
+
+- [x] **Step 5: Write and pass the human-summary regression**
+
+Assert an interrupted cleanup with more selected than processed prints both counts. Update `WriteCleanup` to include `SelectedCount` and processed item count while retaining deleted/skipped/failed and estimated-byte totals.
+
+- [x] **Step 6: Run all acceptance gates, append report, and commit**
+
+Run focused cleanup/command tests, `dotnet test DevCleaner.slnx`, the warning-as-error Release build, arm64 Native AOT publish and version invocation, and native disposable-repository cleanup smoke including outside-target preservation and quarantine removal. Append exact RED/GREEN and acceptance evidence to `.superpowers/sdd/task-5-report.md`, then commit all review fixes.

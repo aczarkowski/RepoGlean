@@ -76,6 +76,36 @@ public sealed class ReportWriterTests
         Assert.Single(rejected.Warnings);
     }
 
+    [Fact]
+    public void Interrupted_human_cleanup_summary_prints_original_selected_and_processed_counts()
+    {
+        var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
+        var candidate = new ArtifactCandidate(
+            "/repos/sample",
+            "/repos/sample/obj",
+            "obj",
+            "dotnet.obj",
+            ArtifactCategory.Build,
+            true,
+            1,
+            5,
+            identity);
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            new CleanupResult(
+                [new CleanupCandidateResult(candidate, CleanupOutcome.Failed, "Cleanup interrupted.")],
+                false,
+                true,
+                3));
+        using var output = new StringWriter();
+
+        HumanReportWriter.WriteCleanup(report, output, quiet: true);
+
+        var text = output.ToString();
+        Assert.Contains("3 selected", text, StringComparison.Ordinal);
+        Assert.Contains("1 processed", text, StringComparison.Ordinal);
+    }
+
     private static ReportDocument CreateReport()
     {
         var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);

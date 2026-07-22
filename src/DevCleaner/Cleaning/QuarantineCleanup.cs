@@ -5,6 +5,7 @@ namespace DevCleaner.Cleaning;
 internal sealed class QuarantineCleanup(
     FileTreeAnalyzer analyzer,
     ICleanupFileSystem fileSystem,
+    IAtomicFileMover atomicFileMover,
     ICleanupMutationObserver mutationObserver,
     IFileSystemIdentityProvider identityProvider,
     CleanupBoundaryInspector boundaryInspector)
@@ -22,14 +23,22 @@ internal sealed class QuarantineCleanup(
         fileSystem.CreateDirectory(quarantineRoot);
         if (!TryGetIdentity(quarantineRoot, out var quarantineIdentity, out var quarantineError) || quarantineIdentity is null)
         {
-            _ = TryRemoveEmptyQuarantine(quarantineRoot, null, out _);
-            return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, quarantineError ?? "Unable to identify the cleanup quarantine directory.");
+            return FailBeforeOwnership(
+                candidate,
+                quarantineRoot,
+                null,
+                quarantineError ?? "Unable to identify the cleanup quarantine directory.",
+                out _);
         }
 
         if (!CleanupIdentity.IsDirectory(quarantineIdentity) || !CleanupIdentity.IsSameMount(candidateIdentity, quarantineIdentity))
         {
-            _ = TryRemoveEmptyQuarantine(quarantineRoot, quarantineIdentity, out _);
-            return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, "Cleanup quarantine is not a safe directory on the candidate filesystem mount.");
+            return FailBeforeOwnership(
+                candidate,
+                quarantineRoot,
+                quarantineIdentity,
+                "Cleanup quarantine is not a safe directory on the candidate filesystem mount.",
+                out _);
         }
 
         var moved = false;
@@ -38,7 +47,22 @@ internal sealed class QuarantineCleanup(
             cancellationToken.ThrowIfCancellationRequested();
             mutationObserver.BeforeQuarantineMove(candidate, quarantineRoot, destinationPath);
             cancellationToken.ThrowIfCancellationRequested();
-            fileSystem.Move(candidatePath, destinationPath, isDirectory);
+            var sourceIdentityAvailable = TryGetIdentity(candidatePath, out var sourceIdentity, out var sourceIdentityError);
+            if (!sourceIdentityAvailable || sourceIdentity is null ||
+                !CleanupIdentity.HasSameStableIdentity(candidateIdentity, sourceIdentity) ||
+                isDirectory != CleanupIdentity.IsDirectory(sourceIdentity) ||
+                !CleanupIdentity.IsSameMount(sourceIdentity, quarantineIdentity))
+            {
+                return FailBeforeOwnership(
+                    candidate,
+                    quarantineRoot,
+                    quarantineIdentity,
+                    (sourceIdentityError ?? "Candidate identity, type, or filesystem mount changed at the quarantine move boundary.") +
+                    " The source was not moved or deleted.",
+                    out _);
+            }
+
+            atomicFileMover.MoveNoCopy(candidatePath, destinationPath);
             moved = true;
             mutationObserver.BeforeMovedIdentityCheck(candidate, quarantineRoot, destinationPath);
 
@@ -93,6 +117,17 @@ internal sealed class QuarantineCleanup(
                 "Cleanup was interrupted after the candidate entered quarantine and may have been partially mutated.");
             throw new CleanupMutationInterruptedException(result, exception);
         }
+        catch (OperationCanceledException exception)
+        {
+            var result = FailBeforeOwnership(
+                candidate,
+                quarantineRoot,
+                quarantineIdentity,
+                "Cleanup was interrupted before the candidate entered quarantine.",
+                out var quarantineRemoved);
+            if (quarantineRemoved) throw;
+            throw new CleanupMutationInterruptedException(result, exception);
+        }
         catch (Exception exception) when (moved && exception is IOException or UnauthorizedAccessException)
         {
             return RecoverOrStrand(
@@ -104,11 +139,33 @@ internal sealed class QuarantineCleanup(
                 destinationPath,
                 $"Permanent deletion failed after quarantine ownership: {exception.Message}");
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return FailBeforeOwnership(
+                candidate,
+                quarantineRoot,
+                quarantineIdentity,
+                $"Atomic quarantine move failed: {exception.Message}",
+                out _);
+        }
         catch
         {
-            if (!moved) _ = TryRemoveEmptyQuarantine(quarantineRoot, quarantineIdentity, out _);
             throw;
         }
+    }
+
+    private CleanupCandidateResult FailBeforeOwnership(
+        ArtifactCandidate candidate,
+        string quarantineRoot,
+        FileSystemIdentity? quarantineIdentity,
+        string reason,
+        out bool quarantineRemoved)
+    {
+        quarantineRemoved = TryRemoveEmptyQuarantine(quarantineRoot, quarantineIdentity, out var cleanupError);
+        var cleanupMessage = quarantineRemoved
+            ? string.Empty
+            : $" Empty quarantine cleanup failed; it may remain at '{quarantineRoot}': {cleanupError}";
+        return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, reason + cleanupMessage);
     }
 
     private CleanupCandidateResult RecoverOrStrand(
@@ -120,37 +177,47 @@ internal sealed class QuarantineCleanup(
         string destinationPath,
         string reason)
     {
-        if (!HasIdentity(quarantineRoot, quarantineIdentity) ||
-            !TryGetIdentity(destinationPath, out var strandedIdentity, out _) ||
-            strandedIdentity is null)
-        {
-            return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Cleanup stopped; an object may be stranded at '{destinationPath}'.");
-        }
-
-        var originalParent = Path.GetDirectoryName(candidatePath)!;
-        var boundaryError = boundaryInspector.Inspect(requestedRoot, originalParent);
-        if (boundaryError is not null || boundaryInspector.EntryExists(candidatePath))
-        {
-            return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Cleanup stopped; the mismatched object is stranded at '{destinationPath}'.");
-        }
-
         try
         {
-            fileSystem.Move(destinationPath, candidatePath, CleanupIdentity.IsDirectory(strandedIdentity));
-            if (!HasIdentity(candidatePath, strandedIdentity))
+            if (!HasIdentity(quarantineRoot, quarantineIdentity) ||
+                !TryGetIdentity(destinationPath, out var strandedIdentity, out _) ||
+                strandedIdentity is null)
             {
-                return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Recovery identity verification failed; inspect '{candidatePath}' and '{destinationPath}'.");
+                return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Cleanup stopped; an object may be stranded at '{destinationPath}'.");
             }
 
-            var quarantineRemoved = TryRemoveEmptyQuarantine(quarantineRoot, quarantineIdentity, out var cleanupError);
-            var cleanupMessage = quarantineRemoved
-                ? string.Empty
-                : $" Its empty quarantine remains at '{quarantineRoot}': {cleanupError}";
-            return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} The mismatched object was restored to its original path and was not deleted.{cleanupMessage}");
+            var originalParent = Path.GetDirectoryName(candidatePath)!;
+            var boundaryError = boundaryInspector.Inspect(requestedRoot, originalParent);
+            if (boundaryError is not null || boundaryInspector.EntryExists(candidatePath))
+            {
+                return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Cleanup stopped; the mismatched object is stranded at '{destinationPath}'.");
+            }
+
+            try
+            {
+                atomicFileMover.MoveNoCopy(destinationPath, candidatePath);
+                if (!HasIdentity(candidatePath, strandedIdentity))
+                {
+                    return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Recovery identity verification failed; inspect '{candidatePath}' and '{destinationPath}'.");
+                }
+
+                var quarantineRemoved = TryRemoveEmptyQuarantine(quarantineRoot, quarantineIdentity, out var cleanupError);
+                var cleanupMessage = quarantineRemoved
+                    ? string.Empty
+                    : $" Its empty quarantine remains at '{quarantineRoot}': {cleanupError}";
+                return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} The mismatched object was restored to its original path and was not deleted.{cleanupMessage}");
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Recovery failed: {exception.Message} The object is stranded at '{destinationPath}'.");
+            }
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            return new CleanupCandidateResult(candidate, CleanupOutcome.Failed, $"{reason} Recovery failed: {exception.Message} The object is stranded at '{destinationPath}'.");
+            return new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Failed,
+                $"{reason} Recovery inspection failed: {exception.Message} An object may remain at '{destinationPath}'.");
         }
     }
 
@@ -181,7 +248,7 @@ internal sealed class QuarantineCleanup(
             error = null;
             return true;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
             error = exception.Message;
             return false;

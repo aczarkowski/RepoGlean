@@ -103,7 +103,9 @@ public static class HumanReportWriter
 
         var cleanup = report.Cleanup ?? new CleanupSummaryReport(0, 0, 0, 0, 0, false, false);
         var prefix = cleanup.DryRun ? "Dry run" : "Cleanup";
-        output.WriteLine($"{prefix}: {cleanup.DeletedCount} deleted, {cleanup.SkippedCount} skipped, {cleanup.FailedCount} failed | {FormatBytes(cleanup.EstimatedDeletedBytes)} deleted");
+        output.WriteLine(
+            $"{prefix}: {cleanup.DeletedCount} deleted, {cleanup.SkippedCount} skipped, {cleanup.FailedCount} failed | " +
+            $"{cleanup.SelectedCount} selected, {report.Totals.CandidateCount} processed | {FormatBytes(cleanup.EstimatedDeletedBytes)} deleted");
     }
 
     public static string FormatBytes(long bytes)

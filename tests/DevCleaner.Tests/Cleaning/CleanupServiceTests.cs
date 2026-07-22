@@ -1,4 +1,5 @@
 using DevCleaner.Cleaning;
+using DevCleaner.Cli;
 using DevCleaner.Configuration;
 using DevCleaner.Git;
 using DevCleaner.Rules;
@@ -150,7 +151,7 @@ public sealed class CleanupServiceTests
     }
 
     [Fact]
-    public async Task Candidate_swap_at_quarantine_boundary_never_deletes_the_replacement_and_recovers_it()
+    public async Task Candidate_swap_at_quarantine_boundary_never_moves_or_deletes_either_object()
     {
         using var fixture = await CleanupFixture.CreateAsync();
         var candidate = await fixture.ScanSingleAsync();
@@ -166,14 +167,14 @@ public sealed class CleanupServiceTests
         var failed = Assert.Single(result.Items);
         Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
         Assert.Contains("identity", failed.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("restored", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not moved or deleted", failed.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(File.Exists(Path.Combine(originalPath, "artifact.bin")));
         Assert.True(File.Exists(fixture.Repository.GetPath("obj/replacement.bin")));
         Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
     }
 
     [Fact]
-    public async Task Ancestor_swap_at_quarantine_boundary_strands_the_mismatch_without_deleting_outside_targets()
+    public async Task Ancestor_swap_at_quarantine_boundary_rejects_the_mismatch_without_moving_outside_targets()
     {
         using var fixture = await CleanupFixture.CreateAsync();
         var candidate = await fixture.ScanSingleAsync();
@@ -193,12 +194,153 @@ public sealed class CleanupServiceTests
 
         var failed = Assert.Single(result.Items);
         Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
-        Assert.Contains("stranded", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not moved or deleted", failed.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(File.Exists(Path.Combine(relocatedRepository, "obj", "artifact.bin")));
         Assert.True(File.Exists(Path.Combine(outside, "keep.txt")));
+        Assert.True(File.Exists(Path.Combine(outside, "obj", "replacement.bin")));
+        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+    }
+
+    [Fact]
+    public async Task File_ancestor_swap_after_validation_never_invokes_the_mover_or_mutates_the_outside_file()
+    {
+        using var fixture = await CleanupFixture.CreateFileCandidateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var relocatedRepository = fixture.Temporary.GetPath("relocated-file-repo");
+        var outside = fixture.Temporary.GetPath("outside-file-root");
+        Directory.CreateDirectory(outside);
+        var outsidePath = Path.Combine(outside, "artifact.cache");
+        var outsideBytes = new byte[] { 91, 17, 203, 4, 88 };
+        File.WriteAllBytes(outsidePath, outsideBytes);
+        var mover = new RecordingAtomicFileMover();
+        var observer = new TestMutationObserver(beforeQuarantineMove: (_, _, _) =>
+        {
+            Directory.Move(fixture.Repository.Path, relocatedRepository);
+            Directory.CreateSymbolicLink(fixture.Repository.Path, outside);
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer, atomicFileMover: mover);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("identity", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, mover.MoveCalls);
+        Assert.Equal(outsideBytes, File.ReadAllBytes(outsidePath));
+        Assert.True(File.Exists(Path.Combine(relocatedRepository, "artifact.cache")));
+        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+    }
+
+    [Fact]
+    public void Native_atomic_mover_never_overwrites_an_existing_destination()
+    {
+        using var temporary = new TemporaryDirectory();
+        var source = temporary.GetPath("source.bin");
+        var destination = temporary.GetPath("destination.bin");
+        File.WriteAllText(source, "source");
+        File.WriteAllText(destination, "destination");
+
+        var exception = Assert.Throws<IOException>(() => new NativeAtomicFileMover().MoveNoCopy(source, destination));
+
+        Assert.Contains("atomic", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("source", File.ReadAllText(source));
+        Assert.Equal("destination", File.ReadAllText(destination));
+    }
+
+    [Fact]
+    public async Task Atomic_mover_failure_leaves_the_source_and_reports_failure()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var mover = new FailingAtomicFileMover();
+
+        var result = await fixture.ExecuteAsync([candidate], atomicFileMover: mover);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("Injected atomic move failure", failed.Message, StringComparison.Ordinal);
+        Assert.Equal(1, mover.MoveCalls);
+        Assert.True(Directory.Exists(candidate.AbsolutePath));
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+    }
+
+    [Fact]
+    public async Task Recovery_inspection_failure_reports_the_exact_possible_payload_path()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var failInspection = false;
+        var fileSystem = new InterceptingCleanupFileSystem(
+            failGetAttributes: path => failInspection && string.Equals(path, fixture.Temporary.Path, StringComparison.Ordinal));
+        string? destination = null;
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (_, _, destinationPath) =>
+        {
+            destination = destinationPath;
+            Directory.CreateDirectory(Path.Combine(destinationPath, ".git"));
+            failInspection = true;
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], fileSystem: fileSystem, mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.NotNull(destination);
+        Assert.Contains("Injected recovery inspection failure", failed.Message, StringComparison.Ordinal);
+        Assert.Contains(destination, failed.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(destination));
+    }
+
+    [Theory]
+    [InlineData(EarlyQuarantineFailure.IdentityUnavailable)]
+    [InlineData(EarlyQuarantineFailure.MountMismatch)]
+    [InlineData(EarlyQuarantineFailure.AtomicMove)]
+    public async Task Early_failure_never_discards_empty_quarantine_cleanup_failure(EarlyQuarantineFailure failure)
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var fileSystem = new InterceptingCleanupFileSystem(failQuarantineCleanup: true);
+        var identityProvider = failure is EarlyQuarantineFailure.IdentityUnavailable or EarlyQuarantineFailure.MountMismatch
+            ? new InterceptingIdentityProvider(failure)
+            : null;
+        var mover = failure == EarlyQuarantineFailure.AtomicMove ? new FailingAtomicFileMover() : null;
+
+        var result = await fixture.ExecuteAsync(
+            [candidate],
+            fileSystem: fileSystem,
+            identityProvider: identityProvider,
+            atomicFileMover: mover);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("Injected quarantine cleanup failure", failed.Message, StringComparison.Ordinal);
         var quarantine = Assert.Single(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
-        Assert.True(File.Exists(Path.Combine(quarantine, "payload", "replacement.bin")));
         Assert.Contains(quarantine, failed.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(candidate.AbsolutePath));
+    }
+
+    [Fact]
+    public async Task Pre_move_cancellation_records_empty_quarantine_cleanup_failure_and_path()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        using var cancellation = new CancellationTokenSource();
+        var fileSystem = new InterceptingCleanupFileSystem(failQuarantineCleanup: true);
+        var observer = new TestMutationObserver(beforeQuarantineMove: (_, _, _) => cancellation.Cancel());
+
+        var result = await fixture.ExecuteAsync(
+            [candidate],
+            cancellationToken: cancellation.Token,
+            fileSystem: fileSystem,
+            mutationObserver: observer);
+
+        Assert.True(result.IsInterrupted);
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("interrupt", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Injected quarantine cleanup failure", failed.Message, StringComparison.Ordinal);
+        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        Assert.Contains(quarantine, failed.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(candidate.AbsolutePath));
     }
 
     [Fact]
@@ -303,11 +445,13 @@ public sealed class CleanupServiceTests
     private sealed class CleanupFixture : IDisposable
     {
         private readonly GitClient git = new();
+        private readonly RuleCatalog rules;
 
-        private CleanupFixture(TemporaryDirectory temporary, GitTestRepository repository)
+        private CleanupFixture(TemporaryDirectory temporary, GitTestRepository repository, RuleCatalog rules)
         {
             Temporary = temporary;
             Repository = repository;
+            this.rules = rules;
         }
 
         public TemporaryDirectory Temporary { get; }
@@ -324,14 +468,27 @@ public sealed class CleanupServiceTests
             if (includeSecondCandidate) repository.WriteBytes("src/obj/artifact.bin", 7);
             if (includeThirdCandidate) repository.WriteBytes("tests/obj/artifact.bin", 9);
             await repository.CommitAllAsync();
-            return new CleanupFixture(temporary, repository);
+            return new CleanupFixture(temporary, repository, RuleCatalog.Create(DevCleanerConfig.Default));
+        }
+
+        public static async Task<CleanupFixture> CreateFileCandidateAsync()
+        {
+            var temporary = new TemporaryDirectory();
+            var repository = await GitTestRepository.CreateAsync(temporary.GetPath("file-repo"));
+            repository.Write("project.csproj", "<Project />");
+            repository.Write(".gitignore", "artifact.cache\n");
+            repository.WriteBytes("artifact.cache", 5);
+            await repository.CommitAllAsync();
+            var rule = new ArtifactRule("test.file-cache", ArtifactCategory.Cache, ["artifact.cache"], [], true);
+            var rules = RuleCatalog.Create(new DevCleanerConfig { CustomRules = [rule] });
+            return new CleanupFixture(temporary, repository, rules);
         }
 
         public async Task<IReadOnlyList<ArtifactCandidate>> ScanAsync()
         {
             var result = await new RepositoryScanner(git).ScanAsync(
                 [Repository.Path],
-                RuleCatalog.Create(DevCleanerConfig.Default));
+                rules);
             return result.Repositories.SelectMany(repository => repository.Candidates).OrderBy(candidate => candidate.AbsolutePath, StringComparer.Ordinal).ToArray();
         }
 
@@ -343,11 +500,18 @@ public sealed class CleanupServiceTests
             IReadOnlyList<string>? requestedRoots = null,
             CancellationToken cancellationToken = default,
             ICleanupFileSystem? fileSystem = null,
-            ICleanupMutationObserver? mutationObserver = null)
+            ICleanupMutationObserver? mutationObserver = null,
+            IAtomicFileMover? atomicFileMover = null,
+            IFileSystemIdentityProvider? identityProvider = null)
         {
-            var service = new CleanupService(git, fileSystem: fileSystem, mutationObserver: mutationObserver);
+            var service = new CleanupService(
+                git,
+                fileSystem: fileSystem,
+                mutationObserver: mutationObserver,
+                identityProvider: identityProvider,
+                atomicFileMover: atomicFileMover);
             return service.ExecuteAsync(
-                new CleanupRequest(candidates, requestedRoots ?? [Temporary.Path], RuleCatalog.Create(DevCleanerConfig.Default), dryRun),
+                new CleanupRequest(candidates, requestedRoots ?? [Temporary.Path], rules, dryRun),
                 cancellationToken);
         }
 
@@ -369,6 +533,66 @@ public sealed class CleanupServiceTests
             beforeRecursiveDelete?.Invoke(candidate, quarantineRoot, destinationPath);
     }
 
+    private sealed class FailingAtomicFileMover : IAtomicFileMover
+    {
+        public int MoveCalls { get; private set; }
+
+        public void MoveNoCopy(string sourcePath, string destinationPath)
+        {
+            MoveCalls++;
+            throw new IOException("Injected atomic move failure.");
+        }
+    }
+
+    private sealed class RecordingAtomicFileMover : IAtomicFileMover
+    {
+        private readonly NativeAtomicFileMover inner = new();
+
+        public int MoveCalls { get; private set; }
+
+        public void MoveNoCopy(string sourcePath, string destinationPath)
+        {
+            MoveCalls++;
+            inner.MoveNoCopy(sourcePath, destinationPath);
+        }
+    }
+
+    private sealed class InterceptingIdentityProvider(EarlyQuarantineFailure failure) : IFileSystemIdentityProvider
+    {
+        private readonly FileSystemIdentityProvider inner = new();
+
+        public bool TryGetIdentity(string path, out FileSystemIdentity? identity, out string? error)
+        {
+            if (IsQuarantineRoot(path) && failure == EarlyQuarantineFailure.IdentityUnavailable)
+            {
+                identity = null;
+                error = "Injected quarantine identity failure.";
+                return false;
+            }
+
+            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null) return false;
+            if (IsQuarantineRoot(path) && failure == EarlyQuarantineFailure.MountMismatch)
+            {
+                identity = identity with { VolumeId = identity.VolumeId + 1, MountId = "injected-other-mount" };
+            }
+
+            return true;
+        }
+
+        public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? identity, out string? error) =>
+            inner.TryGetMountIdentity(path, out identity, out error);
+
+        private static bool IsQuarantineRoot(string path) =>
+            Path.GetFileName(path).StartsWith(".devcleaner-quarantine-", StringComparison.Ordinal);
+    }
+
+    public enum EarlyQuarantineFailure
+    {
+        IdentityUnavailable,
+        MountMismatch,
+        AtomicMove,
+    }
+
     private sealed class InterceptingCleanupFileSystem : ICleanupFileSystem
     {
         private readonly SystemCleanupFileSystem inner = new();
@@ -377,6 +601,7 @@ public sealed class CleanupServiceTests
         private readonly int cancelAfterFileDeleteOnCall;
         private readonly CancellationTokenSource? cancellation;
         private readonly bool failQuarantineCleanup;
+        private readonly Func<string, bool>? failGetAttributes;
         private int ownedDeleteCalls;
         private bool deletionFailureInjected;
 
@@ -385,20 +610,28 @@ public sealed class CleanupServiceTests
             CancellationTokenSource? cancelAfterDirectoryDelete = null,
             int cancelAfterFileDeleteOnCall = 0,
             CancellationTokenSource? cancellation = null,
-            bool failQuarantineCleanup = false)
+            bool failQuarantineCleanup = false,
+            Func<string, bool>? failGetAttributes = null)
         {
             this.failingPath = failingPath;
             this.cancelAfterDirectoryDelete = cancelAfterDirectoryDelete;
             this.cancelAfterFileDeleteOnCall = cancelAfterFileDeleteOnCall;
             this.cancellation = cancellation;
             this.failQuarantineCleanup = failQuarantineCleanup;
+            this.failGetAttributes = failGetAttributes;
         }
 
-        public FileAttributes GetAttributes(string path) => inner.GetAttributes(path);
+        public FileAttributes GetAttributes(string path)
+        {
+            if (failGetAttributes?.Invoke(path) == true)
+            {
+                throw new UnauthorizedAccessException("Injected recovery inspection failure.");
+            }
+
+            return inner.GetAttributes(path);
+        }
 
         public void CreateDirectory(string path) => inner.CreateDirectory(path);
-
-        public void Move(string sourcePath, string destinationPath, bool isDirectory) => inner.Move(sourcePath, destinationPath, isDirectory);
 
         public void DeleteOwnedObject(string path, bool isDirectory, CancellationToken cancellationToken)
         {

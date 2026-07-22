@@ -21,7 +21,8 @@ public sealed class CleanupService
         FileTreeAnalyzer? analyzer = null,
         ICleanupFileSystem? fileSystem = null,
         ICleanupMutationObserver? mutationObserver = null,
-        IFileSystemIdentityProvider? identityProvider = null)
+        IFileSystemIdentityProvider? identityProvider = null,
+        IAtomicFileMover? atomicFileMover = null)
     {
         this.git = git ?? throw new ArgumentNullException(nameof(git));
         var resolvedIdentityProvider = identityProvider ?? new FileSystemIdentityProvider();
@@ -31,6 +32,7 @@ public sealed class CleanupService
         quarantineCleanup = new QuarantineCleanup(
             this.analyzer,
             this.fileSystem,
+            atomicFileMover ?? new NativeAtomicFileMover(),
             mutationObserver ?? new NullCleanupMutationObserver(),
             resolvedIdentityProvider,
             boundaryInspector);

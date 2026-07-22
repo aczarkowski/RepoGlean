@@ -189,18 +189,37 @@ public sealed class RepositoryDiscoveryTests
         Assert.Contains(repository.Path, result.Repositories);
     }
 
+    [Fact]
+    public async Task DiscoverAsync_retains_fixed_drive_enumeration_warnings()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        var driveWarning = new OperationWarning("unreadable-drive", "Unable to inspect fixed drive.");
+        var discovery = new RepositoryDiscovery(
+            new GitClient(),
+            [],
+            new TestVolumeBoundary(temporary.GetPath("foreign")),
+            new TestDriveRootProvider(temporary.Path, driveWarning));
+
+        var result = await discovery.DiscoverAsync([], allDrives: true);
+
+        Assert.Contains(repository.Path, result.Repositories);
+        Assert.Contains(driveWarning, result.Warnings);
+    }
+
     private sealed class TestVolumeBoundary(string foreignRoot) : IVolumeBoundary
     {
-        public bool TryGetVolumeId(string path, out ulong volumeId, out string? error)
+        public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? identity, out string? error)
         {
-            volumeId = RepositoryDiscovery.IsSameOrDescendant(System.IO.Path.GetFullPath(path), System.IO.Path.GetFullPath(foreignRoot)) ? 2UL : 1UL;
+            var isForeign = RepositoryDiscovery.IsSameOrDescendant(System.IO.Path.GetFullPath(path), System.IO.Path.GetFullPath(foreignRoot));
+            identity = new FileSystemMountIdentity(isForeign ? 2UL : 1UL, isForeign ? "foreign" : "root");
             error = null;
             return true;
         }
     }
 
-    private sealed class TestDriveRootProvider(string root) : IDriveRootProvider
+    private sealed class TestDriveRootProvider(string root, OperationWarning? warning = null) : IDriveRootProvider
     {
-        public IReadOnlyList<string> GetFixedDriveRoots() => [root];
+        public DriveRootDiscoveryResult GetFixedDriveRoots() => new([root], warning is null ? [] : [warning]);
     }
 }

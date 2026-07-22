@@ -5,26 +5,42 @@ namespace DevCleaner.Scanning;
 
 internal interface IDriveRootProvider
 {
-    IReadOnlyList<string> GetFixedDriveRoots();
+    DriveRootDiscoveryResult GetFixedDriveRoots();
 }
+
+internal sealed record DriveRootDiscoveryResult(IReadOnlyList<string> Roots, IReadOnlyList<OperationWarning> Warnings);
 
 internal sealed class SystemDriveRootProvider : IDriveRootProvider
 {
-    public IReadOnlyList<string> GetFixedDriveRoots()
+    public DriveRootDiscoveryResult GetFixedDriveRoots()
     {
         var roots = new List<string>();
-        foreach (var drive in DriveInfo.GetDrives())
+        var warnings = new List<OperationWarning>();
+        DriveInfo[] drives;
+        try
         {
+            drives = DriveInfo.GetDrives();
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            warnings.Add(new OperationWarning("fixed-drives", $"Unable to enumerate fixed drives: {exception.Message}"));
+            return new DriveRootDiscoveryResult([], Array.AsReadOnly(warnings.ToArray()));
+        }
+
+        foreach (var drive in drives)
+        {
+            var drivePath = drive.Name;
             try
             {
                 if (drive.IsReady && drive.DriveType == DriveType.Fixed) roots.Add(drive.RootDirectory.FullName);
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
+                warnings.Add(new OperationWarning(drivePath, $"Unable to inspect fixed drive: {exception.Message}"));
             }
         }
 
-        return roots;
+        return new DriveRootDiscoveryResult(Array.AsReadOnly(roots.ToArray()), Array.AsReadOnly(warnings.ToArray()));
     }
 }
 
@@ -67,9 +83,12 @@ public sealed class RepositoryDiscovery
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(Path.GetFullPath)
             .ToList();
+        var warnings = new List<OperationWarning>();
         if (allDrives)
         {
-            requestedRoots.AddRange(driveRootProvider.GetFixedDriveRoots().Select(Path.GetFullPath));
+            var driveRoots = driveRootProvider.GetFixedDriveRoots();
+            requestedRoots.AddRange(driveRoots.Roots.Select(Path.GetFullPath));
+            warnings.AddRange(driveRoots.Warnings);
         }
 
         requestedRoots = requestedRoots.Distinct(PathComparer).ToList();
@@ -78,7 +97,6 @@ public sealed class RepositoryDiscovery
             .Select(exclusion => Path.IsPathRooted(exclusion) ? Path.GetFullPath(exclusion) : exclusion.Replace('\\', '/'))
             .ToArray();
         var repositories = new HashSet<string>(PathComparer);
-        var warnings = new List<OperationWarning>();
 
         foreach (var root in requestedRoots)
         {
@@ -89,9 +107,9 @@ public sealed class RepositoryDiscovery
                 continue;
             }
 
-            if (!volumeBoundary.TryGetVolumeId(root, out var rootVolumeId, out var rootVolumeError))
+            if (!volumeBoundary.TryGetMountIdentity(root, out var rootMountIdentity, out var rootMountError) || rootMountIdentity is null)
             {
-                warnings.Add(new OperationWarning(root, rootVolumeError ?? "Unable to identify the scan root volume."));
+                warnings.Add(new OperationWarning(root, rootMountError ?? "Unable to identify the scan root filesystem mount."));
                 continue;
             }
 
@@ -115,15 +133,15 @@ public sealed class RepositoryDiscovery
                     continue;
                 }
 
-                if (!volumeBoundary.TryGetVolumeId(path, out var pathVolumeId, out var volumeError))
+                if (!volumeBoundary.TryGetMountIdentity(path, out var pathMountIdentity, out var volumeError) || pathMountIdentity is null)
                 {
-                    warnings.Add(new OperationWarning(path, volumeError ?? "Unable to identify path volume."));
+                    warnings.Add(new OperationWarning(path, volumeError ?? "Unable to identify path filesystem mount."));
                     continue;
                 }
 
-                if (pathVolumeId != rootVolumeId)
+                if (pathMountIdentity != rootMountIdentity)
                 {
-                    warnings.Add(new OperationWarning(path, "Skipped path on a different filesystem volume."));
+                    warnings.Add(new OperationWarning(path, "Skipped path on a different filesystem mount or volume."));
                     continue;
                 }
 

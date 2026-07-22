@@ -1,12 +1,16 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace DevCleaner.Scanning;
 
+internal sealed record FileSystemMountIdentity(ulong VolumeId, string MountId);
+
 internal interface IVolumeBoundary
 {
-    bool TryGetVolumeId(string path, out ulong volumeId, out string? error);
+    bool TryGetMountIdentity(string path, out FileSystemMountIdentity? identity, out string? error);
 }
 
 internal interface IFileSystemIdentityProvider : IVolumeBoundary
@@ -16,15 +20,18 @@ internal interface IFileSystemIdentityProvider : IVolumeBoundary
 
 internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
 {
-    public bool TryGetVolumeId(string path, out ulong volumeId, out string? error)
+    internal const uint LinuxStatxInode = 0x0100;
+    internal const uint LinuxStatxMountId = 0x1000;
+
+    public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? mountIdentity, out string? error)
     {
         if (TryGetIdentity(path, out var identity, out error) && identity is not null)
         {
-            volumeId = identity.VolumeId;
+            mountIdentity = new FileSystemMountIdentity(identity.VolumeId, identity.MountId);
             return true;
         }
 
-        volumeId = 0;
+        mountIdentity = null;
         return false;
     }
 
@@ -78,6 +85,7 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         identity = new FileSystemIdentity(
             information.VolumeSerialNumber,
             ((ulong)information.FileIndexHigh << 32) | information.FileIndexLow,
+            GetWindowsMountId(path),
             attributes,
             linkTarget);
         error = null;
@@ -93,19 +101,25 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
     {
         const int atFileWorkingDirectory = -100;
         const int atSymlinkNoFollow = 0x100;
-        const uint statxBasicStats = 0x07ff;
-        const uint statxInode = 0x0100;
-        if (Statx(atFileWorkingDirectory, path, atSymlinkNoFollow, statxBasicStats, out var information) != 0 ||
-            (information.Mask & statxInode) == 0)
+        const uint statxBasicStatsAndMountId = 0x07ff | LinuxStatxMountId;
+        if (Statx(atFileWorkingDirectory, path, atSymlinkNoFollow, statxBasicStatsAndMountId, out var information) != 0)
         {
             identity = null;
             error = NativeError("Unable to capture stable Linux filesystem identity");
             return false;
         }
 
+        if (!HasRequiredLinuxIdentity(information.Mask))
+        {
+            identity = null;
+            error = $"Linux statx did not return required inode and mount identity fields (mask 0x{information.Mask:x}).";
+            return false;
+        }
+
         identity = new FileSystemIdentity(
             ((ulong)information.DeviceMajor << 32) | information.DeviceMinor,
             information.Inode,
+            information.MountId.ToString(CultureInfo.InvariantCulture),
             attributes,
             linkTarget);
         error = null;
@@ -119,16 +133,59 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         out FileSystemIdentity? identity,
         out string? error)
     {
-        if (LStat(path, out var information) != 0)
+        MacStat information = default;
+        var interop = SelectMacStatInterop(RuntimeInformation.ProcessArchitecture);
+        var result = interop switch
+        {
+            MacStatInteropKind.Arm64Unsuffixed => LStatMacArm64(path, out information),
+            MacStatInteropKind.X64Inode64 => LStatMacX64(path, out information),
+            _ => -1,
+        };
+        if (result != 0)
         {
             identity = null;
-            error = NativeError("Unable to capture stable macOS filesystem identity");
+            error = interop == MacStatInteropKind.Unsupported
+                ? $"Stable macOS filesystem identity is unavailable on architecture {RuntimeInformation.ProcessArchitecture}."
+                : NativeError("Unable to capture stable macOS filesystem identity");
             return false;
         }
 
-        identity = new FileSystemIdentity(unchecked((uint)information.Device), information.Inode, attributes, linkTarget);
+        var deviceId = unchecked((uint)information.Device);
+        identity = new FileSystemIdentity(
+            deviceId,
+            information.Inode,
+            $"darwin-device:{deviceId.ToString(CultureInfo.InvariantCulture)}",
+            attributes,
+            linkTarget);
         error = null;
         return true;
+    }
+
+    internal static MacStatInteropKind SelectMacStatInterop(Architecture architecture) => architecture switch
+    {
+        Architecture.Arm64 => MacStatInteropKind.Arm64Unsuffixed,
+        Architecture.X64 => MacStatInteropKind.X64Inode64,
+        _ => MacStatInteropKind.Unsupported,
+    };
+
+    internal static bool HasRequiredLinuxIdentity(uint mask) =>
+        (mask & (LinuxStatxInode | LinuxStatxMountId)) == (LinuxStatxInode | LinuxStatxMountId);
+
+    private static string GetWindowsMountId(string path)
+    {
+        var volumePath = new StringBuilder(32_768);
+        if (!GetVolumePathNameW(path, volumePath, volumePath.Capacity))
+        {
+            throw new IOException(NativeError("Unable to resolve the Windows volume path"));
+        }
+
+        var volumeName = new StringBuilder(128);
+        if (!GetVolumeNameForVolumeMountPointW(volumePath.ToString(), volumeName, volumeName.Capacity))
+        {
+            throw new IOException(NativeError("Unable to resolve the Windows volume mount identity"));
+        }
+
+        return volumeName.ToString();
     }
 
     private static string NativeError(string prefix)
@@ -151,6 +208,14 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetFileInformationByHandle(SafeFileHandle file, out ByHandleFileInformation fileInformation);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetVolumePathNameW(string fileName, StringBuilder volumePathName, int bufferLength);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetVolumeNameForVolumeMountPointW(string volumeMountPoint, StringBuilder volumeName, int bufferLength);
+
     [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
     private static extern int Statx(
         int directoryFileDescriptor,
@@ -160,7 +225,12 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         out LinuxStatx information);
 
     [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
-    private static extern int LStat(
+    private static extern int LStatMacArm64(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        out MacStat information);
+
+    [DllImport("libc", EntryPoint = "lstat$INODE64", SetLastError = true)]
+    private static extern int LStatMacX64(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
         out MacStat information);
 
@@ -257,4 +327,11 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         public long Spare0;
         public long Spare1;
     }
+}
+
+internal enum MacStatInteropKind
+{
+    Unsupported,
+    Arm64Unsuffixed,
+    X64Inode64,
 }

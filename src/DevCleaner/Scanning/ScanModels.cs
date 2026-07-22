@@ -7,6 +7,7 @@ public sealed record OperationWarning(string Path, string Message);
 public sealed record FileSystemIdentity(
     ulong VolumeId,
     ulong FileId,
+    string MountId,
     FileAttributes Attributes,
     string? LinkTarget);
 

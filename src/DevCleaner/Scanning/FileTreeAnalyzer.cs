@@ -34,6 +34,12 @@ public sealed class FileTreeAnalyzer
             return new FileTreeAnalysis(false, 0, 0, null, warnings);
         }
 
+        if (!identityProvider.TryGetIdentity(fullRepositoryRoot, out var repositoryIdentity, out var repositoryIdentityError) || repositoryIdentity is null)
+        {
+            warnings.Add(new OperationWarning(fullRepositoryRoot, repositoryIdentityError ?? "Repository mount identity is unavailable."));
+            return new FileTreeAnalysis(false, 0, 0, null, warnings);
+        }
+
         FileAttributes rootAttributes;
         try
         {
@@ -57,6 +63,12 @@ public sealed class FileTreeAnalyzer
             return new FileTreeAnalysis(false, 0, 0, null, warnings);
         }
 
+        if (!IsSameMount(identity, repositoryIdentity))
+        {
+            warnings.Add(new OperationWarning(fullPath, "Candidate crosses the repository filesystem mount boundary."));
+            return new FileTreeAnalysis(false, 0, 0, identity, warnings);
+        }
+
         if ((identity.Attributes & FileAttributes.Directory) == 0)
         {
             try
@@ -78,63 +90,58 @@ public sealed class FileTreeAnalyzer
         {
             cancellationToken.ThrowIfCancellationRequested();
             var directory = pending.Pop();
-            IReadOnlyList<string> entries;
             try
             {
-                entries = Directory.GetFileSystemEntries(directory);
+                foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase))
+                    {
+                        warnings.Add(new OperationWarning(entry, "Candidate contains a nested repository boundary."));
+                        return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                    }
+
+                    var attributes = File.GetAttributes(entry);
+
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        warnings.Add(new OperationWarning(entry, "Candidate contains a filesystem link or reparse point."));
+                        return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                    }
+                    if ((attributes & FileAttributes.Directory) != 0)
+                    {
+                        if (!identityProvider.TryGetIdentity(entry, out var directoryIdentity, out var directoryIdentityError) || directoryIdentity is null)
+                        {
+                            warnings.Add(new OperationWarning(entry, directoryIdentityError ?? "Directory mount identity is unavailable."));
+                            return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                        }
+
+                        if (!IsSameMount(directoryIdentity, repositoryIdentity))
+                        {
+                            warnings.Add(new OperationWarning(entry, "Candidate contains a directory on a different filesystem mount."));
+                            return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                        }
+
+                        pending.Push(entry);
+                        continue;
+                    }
+
+                    fileCount = SaturatingAdd(fileCount, 1);
+                    estimatedBytes = SaturatingAdd(estimatedBytes, new FileInfo(entry).Length);
+                }
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
                 warnings.Add(new OperationWarning(directory, $"Unable to analyze candidate: {exception.Message}"));
                 return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
             }
-
-            foreach (var entry in entries)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase))
-                {
-                    warnings.Add(new OperationWarning(entry, "Candidate contains a nested repository boundary."));
-                    return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
-                }
-
-                FileAttributes attributes;
-                try
-                {
-                    attributes = File.GetAttributes(entry);
-                }
-                catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-                {
-                    warnings.Add(new OperationWarning(entry, $"Unable to analyze candidate entry: {exception.Message}"));
-                    return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
-                }
-
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
-                {
-                    warnings.Add(new OperationWarning(entry, "Candidate contains a filesystem link or reparse point."));
-                    return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
-                }
-                if ((attributes & FileAttributes.Directory) != 0)
-                {
-                    pending.Push(entry);
-                    continue;
-                }
-
-                try
-                {
-                    fileCount = SaturatingAdd(fileCount, 1);
-                    estimatedBytes = SaturatingAdd(estimatedBytes, new FileInfo(entry).Length);
-                }
-                catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-                {
-                    warnings.Add(new OperationWarning(entry, $"Unable to read candidate file length: {exception.Message}"));
-                    return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
-                }
-            }
         }
 
         return new FileTreeAnalysis(true, fileCount, estimatedBytes, identity, warnings);
     }
+
+    private static bool IsSameMount(FileSystemIdentity left, FileSystemIdentity right) =>
+        left.VolumeId == right.VolumeId && string.Equals(left.MountId, right.MountId, StringComparison.Ordinal);
 
     internal static long SaturatingAdd(long left, long right) => right > 0 && left > long.MaxValue - right ? long.MaxValue : left + right;
 }

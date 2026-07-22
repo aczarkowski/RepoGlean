@@ -132,10 +132,10 @@ public static class CliParser
 
         return ParseResult<CliOptions>.Success(new CliOptions(
             command.Value,
-            Array.AsReadOnly(roots.ToArray()),
-            Array.AsReadOnly(repositories.ToArray()),
-            Array.AsReadOnly(categories.ToArray()),
-            Array.AsReadOnly(exclusions.ToArray()),
+            roots,
+            repositories,
+            categories,
+            exclusions,
             minimumBytes,
             allDrives,
             details,
@@ -201,9 +201,26 @@ public static class CliParser
         }
     }
 
-    private static bool TryParseCategory(string value, out ArtifactCategory category) =>
-        Enum.TryParse(value, ignoreCase: true, out category) && Enum.IsDefined(category);
+    private static bool TryParseCategory(string value, out ArtifactCategory category)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "build": category = ArtifactCategory.Build; return true;
+            case "cache": category = ArtifactCategory.Cache; return true;
+            case "test": category = ArtifactCategory.Test; return true;
+            case "ide": category = ArtifactCategory.Ide; return true;
+            case "dependency": category = ArtifactCategory.Dependency; return true;
+            default: category = default; return false;
+        }
+    }
 
-    private static bool TryParseFormat(string value, out OutputFormat format) =>
-        Enum.TryParse(value, ignoreCase: true, out format) && Enum.IsDefined(format);
+    private static bool TryParseFormat(string value, out OutputFormat format)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "table": format = OutputFormat.Table; return true;
+            case "json": format = OutputFormat.Json; return true;
+            default: format = default; return false;
+        }
+    }
 }

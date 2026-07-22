@@ -27,23 +27,78 @@ public enum ArtifactCategory
     Dependency,
 }
 
-public sealed record CliOptions(
-    CommandKind Command,
-    IReadOnlyList<string> Roots,
-    IReadOnlyList<string> Repositories,
-    IReadOnlyList<ArtifactCategory> Categories,
-    IReadOnlyList<string> Exclusions,
-    long? MinimumBytes,
-    bool AllDrives,
-    bool Details,
-    bool DryRun,
-    bool Yes,
-    bool All,
-    OutputFormat OutputFormat,
-    bool NoColor,
-    string? ConfigPath,
-    bool Help,
-    bool Version);
+public sealed record CliOptions
+{
+    public CliOptions(
+        CommandKind command,
+        IReadOnlyList<string> roots,
+        IReadOnlyList<string> repositories,
+        IReadOnlyList<ArtifactCategory> categories,
+        IReadOnlyList<string> exclusions,
+        long? minimumBytes,
+        bool allDrives,
+        bool details,
+        bool dryRun,
+        bool yes,
+        bool all,
+        OutputFormat outputFormat,
+        bool noColor,
+        string? configPath,
+        bool help,
+        bool version)
+    {
+        Command = command;
+        Roots = Freeze(roots);
+        Repositories = Freeze(repositories);
+        Categories = Freeze(categories);
+        Exclusions = Freeze(exclusions);
+        MinimumBytes = minimumBytes;
+        AllDrives = allDrives;
+        Details = details;
+        DryRun = dryRun;
+        Yes = yes;
+        All = all;
+        OutputFormat = outputFormat;
+        NoColor = noColor;
+        ConfigPath = configPath;
+        Help = help;
+        Version = version;
+    }
+
+    public CommandKind Command { get; }
+
+    public IReadOnlyList<string> Roots { get; }
+
+    public IReadOnlyList<string> Repositories { get; }
+
+    public IReadOnlyList<ArtifactCategory> Categories { get; }
+
+    public IReadOnlyList<string> Exclusions { get; }
+
+    public long? MinimumBytes { get; }
+
+    public bool AllDrives { get; }
+
+    public bool Details { get; }
+
+    public bool DryRun { get; }
+
+    public bool Yes { get; }
+
+    public bool All { get; }
+
+    public OutputFormat OutputFormat { get; }
+
+    public bool NoColor { get; }
+
+    public string? ConfigPath { get; }
+
+    public bool Help { get; }
+
+    public bool Version { get; }
+
+    private static IReadOnlyList<T> Freeze<T>(IReadOnlyList<T> values) => Array.AsReadOnly(values.ToArray());
+}
 
 public sealed record ParseResult<T>(T? Value, string? Error)
     where T : class

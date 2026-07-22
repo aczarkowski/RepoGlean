@@ -112,6 +112,48 @@ public sealed class CliParserTests
     }
 
     [Theory]
+    [InlineData("0")]
+    [InlineData("4")]
+    public void Parse_rejects_numeric_category_tokens(string category)
+    {
+        var result = CliParser.Parse(["scan", "--category", category]);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("Invalid category", result.Error);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1")]
+    public void Parse_rejects_numeric_output_format_tokens(string format)
+    {
+        var result = CliParser.Parse(["scan", "--format", format]);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("Invalid output format", result.Error);
+    }
+
+    [Fact]
+    public void CliOptions_copies_caller_supplied_filter_lists()
+    {
+        var roots = new List<string> { "root" };
+        var repositories = new List<string> { "api" };
+        var categories = new List<ArtifactCategory> { ArtifactCategory.Build };
+        var exclusions = new List<string> { "generated" };
+        var options = new CliOptions(CommandKind.Scan, roots, repositories, categories, exclusions, null, false, false, false, false, false, OutputFormat.Table, false, null, false, false);
+
+        roots.Add("other-root");
+        repositories.Add("web");
+        categories.Add(ArtifactCategory.Cache);
+        exclusions.Add("artifacts");
+
+        Assert.Equal(["root"], options.Roots);
+        Assert.Equal(["api"], options.Repositories);
+        Assert.Equal([ArtifactCategory.Build], options.Categories);
+        Assert.Equal(["generated"], options.Exclusions);
+    }
+
+    [Theory]
     [InlineData("clean", "--yes")]
     [InlineData("clean", "--yes", "--dry-run")]
     public void Parse_rejects_clean_yes_without_an_all_repo_or_category_scope(params string[] arguments)

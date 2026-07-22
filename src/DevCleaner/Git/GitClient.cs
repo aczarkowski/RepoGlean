@@ -87,6 +87,30 @@ public sealed class GitClient
         };
     }
 
+    public async Task<bool> ContainsTrackedContentAsync(
+        string repositoryRoot,
+        string repositoryRelativePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRelativePath);
+        ValidateRelativePath(repositoryRelativePath);
+        var result = await runner.RunAsync(
+            ["-C", Path.GetFullPath(repositoryRoot), "ls-files", "-z", "--", NormalizeRelativePath(repositoryRelativePath)],
+            null,
+            cancellationToken).ConfigureAwait(false);
+        EnsureSuccess(result, "git ls-files");
+        return result.StandardOutput.Length > 0;
+    }
+
+    private static void ValidateRelativePath(string repositoryRelativePath)
+    {
+        if (Path.IsPathRooted(repositoryRelativePath) || repositoryRelativePath.Replace('\\', '/').Split('/').Any(segment => segment is "." or ".."))
+        {
+            throw new ArgumentException("Git paths must be repository-relative and cannot contain dot segments.", nameof(repositoryRelativePath));
+        }
+    }
+
     private static string NormalizeRelativePath(string path) => path.Replace('\\', '/').TrimStart('/');
 
     private static void EnsureSuccess(ProcessResult result, string operation)

@@ -1,4 +1,5 @@
 using DevCleaner.Cli;
+using DevCleaner.Cleaning;
 using DevCleaner.Configuration;
 using DevCleaner.Rules;
 using DevCleaner.Scanning;
@@ -25,7 +26,9 @@ public sealed record CandidateReport(
     string Category,
     bool Preselected,
     long FileCount,
-    long EstimatedBytes);
+    long EstimatedBytes,
+    string? Outcome = null,
+    string? Message = null);
 
 public sealed record RepositoryReport(
     string Root,
@@ -42,6 +45,15 @@ public sealed record RuleReport(
     IReadOnlyList<string> Patterns,
     IReadOnlyList<string> Markers);
 
+public sealed record CleanupSummaryReport(
+    long SelectedCount,
+    long DeletedCount,
+    long SkippedCount,
+    long FailedCount,
+    long EstimatedDeletedBytes,
+    bool DryRun,
+    bool Interrupted);
+
 public sealed record ReportDocument(
     int SchemaVersion,
     string Operation,
@@ -53,7 +65,8 @@ public sealed record ReportDocument(
     IReadOnlyList<ReportMessage> Errors,
     IReadOnlyList<RuleReport>? Rules = null,
     DevCleanerConfig? Configuration = null,
-    string? ConfigurationPath = null)
+    string? ConfigurationPath = null,
+    CleanupSummaryReport? Cleanup = null)
 {
     public static ReportDocument FromScan(IReadOnlyList<string> effectiveRoots, ScanResult result)
     {
@@ -101,6 +114,71 @@ public sealed record ReportDocument(
             .OrderBy(rule => rule.Id, StringComparer.Ordinal)
             .ToArray();
         return Empty("rules.list") with { Rules = Array.AsReadOnly(rules) };
+    }
+
+    public static ReportDocument FromCleanup(
+        IReadOnlyList<string> effectiveRoots,
+        CleanupResult result,
+        IReadOnlyList<OperationWarning>? operationWarnings = null)
+    {
+        ArgumentNullException.ThrowIfNull(effectiveRoots);
+        ArgumentNullException.ThrowIfNull(result);
+        var repositories = result.Items
+            .GroupBy(item => item.Candidate.RepositoryRoot, PathComparer)
+            .OrderBy(group => group.Key, PathComparer)
+            .Select(group => new RepositoryReport(
+                group.Key,
+                Array.AsReadOnly(group.Select(item => new CandidateReport(
+                        item.Candidate.AbsolutePath,
+                        item.Candidate.RelativePath,
+                        item.Candidate.RuleId,
+                        FormatCategory(item.Candidate.Category),
+                        item.Candidate.Preselected,
+                        item.Candidate.FileCount,
+                        item.Candidate.EstimatedBytes,
+                        item.Outcome.ToString().ToLowerInvariant(),
+                        item.Message))
+                    .ToArray()),
+                group.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.FileCount)),
+                group.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.EstimatedBytes))))
+            .ToArray();
+        var skippedWarnings = result.Items
+            .Where(item => item.Outcome == CleanupOutcome.Skipped)
+            .Where(item => !(result.DryRun && item.Message.StartsWith("Validated; dry run", StringComparison.Ordinal)))
+            .Select(item => new ReportMessage(item.Candidate.AbsolutePath, item.Message))
+            .ToArray();
+        var warnings = (operationWarnings ?? [])
+            .Select(warning => new ReportMessage(warning.Path, warning.Message))
+            .Concat(skippedWarnings)
+            .ToArray();
+        var errors = result.Items
+            .Where(item => item.Outcome == CleanupOutcome.Failed)
+            .Select(item => new ReportMessage(item.Candidate.AbsolutePath, item.Message))
+            .ToArray();
+        var status = result.IsInterrupted
+            ? "interrupted"
+            : warnings.Length > 0 || errors.Length > 0
+                ? "partial"
+                : "success";
+        var selectedFileCount = result.Items.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.FileCount));
+        var selectedBytes = result.Items.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.EstimatedBytes));
+        return new ReportDocument(
+            ReportSchema.CurrentVersion,
+            "clean",
+            status,
+            Array.AsReadOnly(effectiveRoots.ToArray()),
+            Array.AsReadOnly(repositories),
+            new ReportTotals(repositories.LongLength, result.Items.Count, selectedFileCount, selectedBytes),
+            Array.AsReadOnly(warnings),
+            Array.AsReadOnly(errors),
+            Cleanup: new CleanupSummaryReport(
+                result.Items.Count,
+                result.DeletedCount,
+                result.SkippedCount,
+                result.FailedCount,
+                result.EstimatedDeletedBytes,
+                result.DryRun,
+                result.IsInterrupted));
     }
 
     public static ReportDocument Failure(string operation, string message) =>

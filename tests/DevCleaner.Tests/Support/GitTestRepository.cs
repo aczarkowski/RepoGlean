@@ -18,6 +18,7 @@ internal sealed class GitTestRepository
         await repository.GitAsync("init", "--quiet");
         await repository.GitAsync("config", "user.name", "DevCleaner Tests");
         await repository.GitAsync("config", "user.email", "devcleaner@example.invalid");
+        await repository.GitAsync("config", "commit.gpgsign", "false");
         return repository;
     }
 

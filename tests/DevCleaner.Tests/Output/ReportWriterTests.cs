@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DevCleaner.Cli;
+using DevCleaner.Cleaning;
 using DevCleaner.Output;
 using DevCleaner.Scanning;
 
@@ -55,6 +56,24 @@ public sealed class ReportWriterTests
         Assert.Equal(1, root.GetProperty("warnings").GetArrayLength());
         Assert.Equal(0, root.GetProperty("errors").GetArrayLength());
         Assert.DoesNotContain("\u001b[", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Dry_run_report_distinguishes_validated_candidates_from_safety_skips()
+    {
+        var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
+        var candidate = new ArtifactCandidate("/repos/sample", "/repos/sample/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 5, identity);
+        var validated = ReportDocument.FromCleanup(
+            ["/repos"],
+            new CleanupResult([new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, "Validated; dry run did not delete the candidate.")], true, false));
+        var rejected = ReportDocument.FromCleanup(
+            ["/repos"],
+            new CleanupResult([new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, "Candidate filesystem identity changed after the scan.")], true, false));
+
+        Assert.Equal("success", validated.Status);
+        Assert.Empty(validated.Warnings);
+        Assert.Equal("partial", rejected.Status);
+        Assert.Single(rejected.Warnings);
     }
 
     private static ReportDocument CreateReport()

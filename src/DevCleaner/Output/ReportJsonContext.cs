@@ -12,4 +12,5 @@ namespace DevCleaner.Output;
 [JsonSerializable(typeof(RepositoryReport))]
 [JsonSerializable(typeof(CandidateReport))]
 [JsonSerializable(typeof(RuleReport))]
+[JsonSerializable(typeof(CleanupSummaryReport))]
 internal partial class ReportJsonContext : JsonSerializerContext;

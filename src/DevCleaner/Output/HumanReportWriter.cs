@@ -1,5 +1,7 @@
 namespace DevCleaner.Output;
 
+using DevCleaner.Scanning;
+
 public sealed record HumanReportOptions(bool Details, bool Quiet, bool Verbose, bool UseColor)
 {
     public static HumanReportOptions Default { get; } = new(false, false, false, false);
@@ -57,6 +59,51 @@ public static class HumanReportWriter
         {
             output.WriteLine($"{YesNo(rule.Enabled),-7}  {YesNo(rule.Preselected),-11}  {rule.Category,-10}  {rule.Source,-8}  {rule.Id}");
         }
+    }
+
+    public static void WriteRepositorySelection(IReadOnlyList<RepositoryScanResult> repositories, TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(repositories);
+        ArgumentNullException.ThrowIfNull(output);
+        output.WriteLine("Repositories:");
+        for (var index = 0; index < repositories.Count; index++)
+        {
+            var repository = repositories[index];
+            output.WriteLine($"  {index + 1}. {repository.RepositoryRoot} ({repository.Candidates.Count} candidates, {FormatBytes(repository.EstimatedBytes)})");
+        }
+    }
+
+    public static void WriteCandidateSelection(IReadOnlyList<ArtifactCandidate> candidates, TextWriter output)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(output);
+        output.WriteLine("Artifacts:");
+        for (var index = 0; index < candidates.Count; index++)
+        {
+            var candidate = candidates[index];
+            var defaultLabel = candidate.Preselected ? "default" : "opt-in";
+            output.WriteLine($"  {index + 1}. {candidate.RepositoryRoot}: {candidate.RelativePath} [{candidate.Category.ToString().ToLowerInvariant()}; {defaultLabel}; {FormatBytes(candidate.EstimatedBytes)}]");
+        }
+    }
+
+    public static void WriteCleanup(ReportDocument report, TextWriter output, bool quiet = false)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!quiet)
+        {
+            foreach (var repository in report.Repositories)
+            {
+                foreach (var candidate in repository.Candidates)
+                {
+                    output.WriteLine($"{candidate.Outcome}: {candidate.AbsolutePath} ({FormatBytes(candidate.EstimatedBytes)}) - {candidate.Message}");
+                }
+            }
+        }
+
+        var cleanup = report.Cleanup ?? new CleanupSummaryReport(0, 0, 0, 0, 0, false, false);
+        var prefix = cleanup.DryRun ? "Dry run" : "Cleanup";
+        output.WriteLine($"{prefix}: {cleanup.DeletedCount} deleted, {cleanup.SkippedCount} skipped, {cleanup.FailedCount} failed | {FormatBytes(cleanup.EstimatedDeletedBytes)} deleted");
     }
 
     public static string FormatBytes(long bytes)

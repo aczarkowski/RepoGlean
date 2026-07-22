@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DevCleaner.Cli;
+using DevCleaner.Cleaning;
 using DevCleaner.Configuration;
 using DevCleaner.Git;
 using DevCleaner.Output;
@@ -57,7 +58,6 @@ public static class DevCleanerApp
         ArgumentNullException.ThrowIfNull(stdout);
         ArgumentNullException.ThrowIfNull(stderr);
         ArgumentNullException.ThrowIfNull(runtime);
-        _ = input;
 
         if (arguments.Length == 0)
         {
@@ -122,8 +122,7 @@ public static class DevCleanerApp
                 case CommandKind.Scan:
                     return await RunScanAsync(options, config, runtime, stdout, stderr, cancellationToken).ConfigureAwait(false);
                 case CommandKind.Clean:
-                    await stderr.WriteLineAsync("Error: clean is not available in this build.").ConfigureAwait(false);
-                    return 2;
+                    return await RunCleanAsync(options, config, runtime, input, stdout, stderr, cancellationToken).ConfigureAwait(false);
                 default:
                     await stderr.WriteLineAsync("Error: unsupported command.").ConfigureAwait(false);
                     return 2;
@@ -154,6 +153,129 @@ public static class DevCleanerApp
             }
 
             return 1;
+        }
+    }
+
+    private static async Task<int> RunCleanAsync(
+        CliOptions options,
+        DevCleanerConfig config,
+        AppRuntime runtime,
+        TextReader input,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
+        var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
+        var git = new GitClient(runtime.GitExecutable);
+        await git.GetVersionAsync(cancellationToken).ConfigureAwait(false);
+        var showProgress = runtime.IsErrorInteractive && !options.NoProgress && !options.Quiet && options.OutputFormat != OutputFormat.Json;
+        if (showProgress) await stderr.WriteLineAsync($"Scanning {roots.Count} root(s) before cleanup...").ConfigureAwait(false);
+
+        var discoveryService = runtime.DriveRootProvider is null
+            ? new RepositoryDiscovery(git)
+            : new RepositoryDiscovery(git, runtime.DriveRootProvider);
+        var discovery = await discoveryService
+            .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
+            .ConfigureAwait(false);
+        var ruleCatalog = RuleCatalog.Create(config);
+        var scanOptions = new ScanOptions(options.Repositories, options.Categories, exclusions, options.MinimumBytes);
+        var scan = await new RepositoryScanner(git)
+            .ScanAsync(discovery.Repositories, ruleCatalog, scanOptions, cancellationToken)
+            .ConfigureAwait(false);
+        var operationWarnings = discovery.Warnings.Concat(scan.Warnings).ToArray();
+        var effectiveRoots = discovery.EffectiveRoots ?? roots;
+        var availableRepositories = scan.Repositories.Where(repository => repository.Candidates.Count > 0).ToArray();
+
+        IReadOnlyList<ArtifactCandidate> selectedCandidates;
+        if (!options.Yes && !options.DryRun && availableRepositories.Length > 0)
+        {
+            HumanReportWriter.WriteRepositorySelection(availableRepositories, stdout);
+            var repositoryDefaults = Enumerable.Range(0, availableRepositories.Length).ToArray();
+            var repositorySelection = await ReadSelectionAsync(
+                input,
+                stdout,
+                "Select repositories [Enter=all]: ",
+                availableRepositories.Length,
+                repositoryDefaults,
+                cancellationToken).ConfigureAwait(false);
+            var selectedRepositories = repositorySelection.Select(index => availableRepositories[index]).ToArray();
+            var availableCandidates = selectedRepositories.SelectMany(repository => repository.Candidates).ToArray();
+            HumanReportWriter.WriteCandidateSelection(availableCandidates, stdout);
+            var candidateDefaults = FilterCandidates(selectedRepositories, includeOptIn: false)
+                .Select(candidate => Array.IndexOf(availableCandidates, candidate))
+                .ToArray();
+            var candidateSelection = await ReadSelectionAsync(
+                input,
+                stdout,
+                "Select artifacts [Enter=defaults, all=include dependencies]: ",
+                availableCandidates.Length,
+                candidateDefaults,
+                cancellationToken).ConfigureAwait(false);
+            selectedCandidates = Array.AsReadOnly(candidateSelection.Select(index => availableCandidates[index]).ToArray());
+        }
+        else
+        {
+            var includeOptIn = options.All || options.Categories.Count > 0;
+            selectedCandidates = FilterCandidates(availableRepositories, includeOptIn);
+        }
+
+        if (!options.Yes && !options.DryRun && selectedCandidates.Count > 0)
+        {
+            await stdout.WriteAsync($"Type delete to permanently remove {selectedCandidates.Count} selected artifact(s): ").ConfigureAwait(false);
+            var confirmation = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(confirmation, "delete", StringComparison.Ordinal))
+            {
+                await stdout.WriteLineAsync("Cleanup cancelled; nothing was deleted.").ConfigureAwait(false);
+                return 0;
+            }
+        }
+
+        var cleanup = await new CleanupService(git)
+            .ExecuteAsync(new CleanupRequest(selectedCandidates, effectiveRoots, ruleCatalog, options.DryRun), cancellationToken)
+            .ConfigureAwait(false);
+        var report = ReportDocument.FromCleanup(effectiveRoots, cleanup, operationWarnings);
+        if (options.OutputFormat == OutputFormat.Json)
+        {
+            await JsonReportWriter.WriteAsync(report, stdout, CancellationToken.None).ConfigureAwait(false);
+        }
+        else
+        {
+            HumanReportWriter.WriteCleanup(report, stdout, options.Quiet);
+        }
+
+        if (showProgress) await stderr.WriteLineAsync("Cleanup complete.").ConfigureAwait(false);
+        if (cleanup.IsInterrupted) return 130;
+        var hasSafetySkips = cleanup.Items.Any(item =>
+            item.Outcome == CleanupOutcome.Skipped &&
+            !(cleanup.DryRun && item.Message.StartsWith("Validated; dry run", StringComparison.Ordinal)));
+        return cleanup.FailedCount > 0 || hasSafetySkips || operationWarnings.Length > 0 ? 3 : 0;
+    }
+
+    private static IReadOnlyList<ArtifactCandidate> FilterCandidates(
+        IReadOnlyList<RepositoryScanResult> repositories,
+        bool includeOptIn) =>
+        Array.AsReadOnly(repositories
+            .SelectMany(repository => repository.Candidates)
+            .Where(candidate => includeOptIn || candidate.Preselected)
+            .ToArray());
+
+    private static async Task<IReadOnlyList<int>> ReadSelectionAsync(
+        TextReader input,
+        TextWriter output,
+        string prompt,
+        int itemCount,
+        IReadOnlyList<int> defaultIndices,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await output.WriteAsync(prompt).ConfigureAwait(false);
+            var value = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            var result = SelectionParser.Parse(value, itemCount, defaultIndices);
+            if (result.IsSuccess) return result.SelectedIndices;
+            await output.WriteLineAsync($"Invalid selection: {result.Error}").ConfigureAwait(false);
         }
     }
 
@@ -265,12 +387,14 @@ public static class DevCleanerApp
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine("  devcleaner scan [root ...] [options]");
+        output.WriteLine("  devcleaner clean [root ...] [options]");
         output.WriteLine("  devcleaner rules list [--format table|json] [--config path]");
         output.WriteLine("  devcleaner config path|show|validate [--config path]");
         output.WriteLine("  devcleaner help | --help | version | --version");
         output.WriteLine();
         output.WriteLine("Scan options: --repo name --category value --exclude path --min-size size");
         output.WriteLine("              --all-drives --details --format table|json");
+        output.WriteLine("Clean options: --dry-run --yes --all (unattended --yes also requires a scope)");
         output.WriteLine("Console:      --quiet --verbose --no-color --no-progress");
     }
 }

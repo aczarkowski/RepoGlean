@@ -36,7 +36,8 @@ retaining the direct archive instructions.
 
 ## Formula contract
 
-`class RepoGlean < Formula` declares:
+Homebrew derives the formula class from `repoglean.rb`, so
+`class Repoglean < Formula` declares:
 
 - description: `Safely reclaim space from regenerable Git artifacts`
 - homepage: `https://github.com/aczarkowski/RepoGlean`
@@ -132,6 +133,8 @@ new formula through their next `brew update`, after which `brew outdated` and
 ## Error handling and safety
 
 - Homebrew rejects a download whose checksum differs from the committed value.
+- The updater follows at most five HTTP redirects so GitHub release asset
+  redirects work without allowing an infinite redirect loop.
 - Unsupported operating systems or CPU architectures fail rather than falling
   back to an incompatible binary.
 - The formula never downloads mutable branch content; it uses immutable,

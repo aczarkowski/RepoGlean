@@ -170,6 +170,7 @@ class RepoGleanFormulaTest < Minitest::Test
     rendered = RepoGleanFormula.render(release)
 
     assert_equal "2.0.0", release.version
+    assert_includes rendered, "class Repoglean < Formula"
     RepoGleanFormula::RIDS.each do |rid|
       assert_includes rendered, "https://example.test/repoglean-#{rid}.tar.gz"
       assert_includes rendered, SHA256.fetch(rid)
@@ -177,6 +178,8 @@ class RepoGleanFormulaTest < Minitest::Test
     assert_includes rendered, 'depends_on "git"'
     assert_includes rendered, "strategy :github_latest"
     assert_includes rendered, 'assert_equal "repoglean #{version}\\n"'
+    assert_operator rendered.index("livecheck do"), :<, rendered.index("on_macos do")
+    assert_operator rendered.index('depends_on "git"'), :<, rendered.index("on_macos do")
 
     Dir.mktmpdir do |directory|
       path = File.join(directory, "repoglean.rb")
@@ -237,11 +240,18 @@ module RepoGleanFormula
 
   def render(release)
     <<~RUBY
-      class RepoGlean < Formula
+      class Repoglean < Formula
         desc "Safely reclaim space from regenerable Git artifacts"
         homepage "https://github.com/aczarkowski/RepoGlean"
         version "#{release.version}"
         license "MIT"
+
+        livecheck do
+          url :stable
+          strategy :github_latest
+        end
+
+        depends_on "git"
 
         on_macos do
           if Hardware::CPU.arm?
@@ -262,13 +272,6 @@ module RepoGleanFormula
             sha256 "#{release.checksums.fetch("linux-x64")}"
           end
         end
-
-        livecheck do
-          url :stable
-          strategy :github_latest
-        end
-
-        depends_on "git"
 
         def install
           rid = if OS.mac?
@@ -429,6 +432,7 @@ def test_cli_updates_then_reports_current
     stdout, stderr, status = Open3.capture3(environment, *command)
     assert status.success?, stderr
     assert_equal "updated repoglean to 2.0.0\n", stdout
+    assert_equal 0o644, File.stat(formula_path).mode & 0o777
 
     first_bytes = File.binread(formula_path)
     stdout, stderr, status = Open3.capture3(environment, *command)
@@ -466,7 +470,7 @@ require_relative "../lib/repoglean_formula"
 
 RELEASE_URL = "https://api.github.com/repos/aczarkowski/RepoGlean/releases/latest"
 
-def get(url)
+def get(url, redirects_remaining = 5)
   uri = URI(url)
   request = Net::HTTP::Get.new(uri)
   request["Accept"] = "application/vnd.github+json"
@@ -474,6 +478,14 @@ def get(url)
   request["User-Agent"] = "aczarkowski-homebrew-tap"
   response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
     http.request(request)
+  end
+  if response.is_a?(Net::HTTPRedirection)
+    raise "GET #{url} exceeded redirect limit" if redirects_remaining.zero?
+
+    location = response["location"]
+    raise "GET #{url} redirected without Location" unless location
+
+    return get(URI.join(url, location).to_s, redirects_remaining - 1)
   end
   raise "GET #{url} returned #{response.code}" unless response.is_a?(Net::HTTPSuccess)
 
@@ -511,6 +523,7 @@ Tempfile.create([target.basename.to_s, ".tmp"], target.dirname) do |temporary|
   temporary.write(rendered)
   temporary.flush
   File.rename(temporary.path, target)
+  File.chmod(0o644, target)
 end
 puts "updated repoglean to #{release.version}"
 ```
@@ -702,9 +715,8 @@ jobs:
 Run:
 
 ```bash
-command -v actionlint >/dev/null || brew install actionlint
 ruby -Ilib test/repoglean_formula_test.rb
-actionlint .github/workflows/*.yml
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
 ```
 
 Expected: all tests pass and actionlint reports no findings.
@@ -738,7 +750,7 @@ Run:
 ```bash
 ruby -Ilib test/repoglean_formula_test.rb
 ruby -c Formula/repoglean.rb
-actionlint .github/workflows/*.yml
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
 brew style aczarkowski/tap/repoglean
 brew audit --strict --online aczarkowski/tap/repoglean
 brew livecheck aczarkowski/tap/repoglean

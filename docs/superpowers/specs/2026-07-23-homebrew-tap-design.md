@@ -36,7 +36,7 @@ retaining the direct archive instructions.
 
 ## Formula contract
 
-`RepoGlean < Formula` declares:
+`class RepoGlean < Formula` declares:
 
 - description: `Safely reclaim space from regenerable Git artifacts`
 - homepage: `https://github.com/aczarkowski/RepoGlean`
@@ -66,6 +66,19 @@ repoglean --version
 
 and requires the exact output `repoglean 2.0.0`.
 
+The formula also declares:
+
+```ruby
+livecheck do
+  url :stable
+  strategy :github_latest
+end
+```
+
+This lets `brew livecheck aczarkowski/tap/repoglean` compare the formula version
+with RepoGlean's latest non-draft GitHub release. Livecheck only detects a newer
+version; it does not mutate the formula.
+
 ## Tap validation and CI
 
 Bootstrap the repository with Homebrew's current `brew tap-new` structure, then
@@ -77,6 +90,7 @@ The committed tap must pass:
 ```bash
 brew style aczarkowski/tap/repoglean
 brew audit --strict --online aczarkowski/tap/repoglean
+brew livecheck aczarkowski/tap/repoglean
 brew install aczarkowski/tap/repoglean
 brew test aczarkowski/tap/repoglean
 repoglean --version
@@ -89,25 +103,45 @@ repository.
 
 ## Release updates
 
-This increment does not add cross-repository automation. For each future
-RepoGlean release, the tap maintainer manually updates:
+The tap includes a deterministic formula updater and a GitHub Actions workflow.
+The workflow runs daily at `06:17 UTC` and supports `workflow_dispatch` for an
+immediate manual check.
 
-1. `version`
-2. the four release archive URLs
-3. the four SHA-256 values
+The updater reads RepoGlean's public GitHub `releases/latest` API response and:
 
-Automatic formula bumps require a separately managed GitHub credential and are
-deferred until there is a subsequent release to automate.
+1. accepts only a stable tag matching `v<major>.<minor>.<patch>`;
+2. requires all four macOS/Linux archives and their four adjacent checksum
+   assets;
+3. validates each checksum as exactly 64 lowercase hexadecimal characters;
+4. renders the complete formula with the new version, URLs, and checksums;
+5. makes no change when the formula already describes the latest release.
+
+When the updater produces a change, the workflow runs the updater's tests,
+Homebrew style, strict online audit, and livecheck. It then creates or updates a
+branch and opens a pull request in `aczarkowski/homebrew-tap`. It never pushes a
+version change directly to `master`.
+
+The workflow needs only the tap repository's scoped `GITHUB_TOKEN` with
+`contents: write` and `pull-requests: write`. Reading RepoGlean's public release
+metadata and assets does not require a cross-repository credential.
+
+The tap maintainer reviews and merges the update pull request. Users receive the
+new formula through their next `brew update`, after which `brew outdated` and
+`brew upgrade repoglean` follow Homebrew's normal version comparison.
 
 ## Error handling and safety
 
 - Homebrew rejects a download whose checksum differs from the committed value.
 - Unsupported operating systems or CPU architectures fail rather than falling
   back to an incompatible binary.
-- The formula never downloads mutable branch content; it uses tagged `v2.0.0`
-  release URLs only.
+- The formula never downloads mutable branch content; it uses immutable,
+  version-tagged release URLs only.
 - The tap is public and contains no repository secrets or cross-repository
   write credential.
+- An incomplete, malformed, draft, or prerelease GitHub release cannot produce
+  a formula update.
+- Update automation opens a pull request and cannot bypass review by writing a
+  new version directly to `master`.
 - The existing RepoGlean `v2.0.0` release and tag remain unchanged.
 
 ## Acceptance criteria
@@ -117,9 +151,17 @@ deferred until there is a subsequent release to automate.
 2. The repository contains `Formula/repoglean.rb`, a tap README, and standard
    Homebrew tap CI.
 3. Formula style and strict online audit pass.
-4. A fresh installation through `brew install aczarkowski/tap/repoglean`
+4. Livecheck reports `2.0.0` as current against RepoGlean's latest stable
+   release.
+5. Updater tests prove correct four-platform rendering, no-op behavior,
+   malformed-tag rejection, missing-asset rejection, and malformed-checksum
+   rejection.
+6. The scheduled workflow has only the permissions required to update a branch
+   and open a tap pull request.
+7. A fresh installation through `brew install aczarkowski/tap/repoglean`
    succeeds on the current macOS ARM64 host.
-5. `brew test aczarkowski/tap/repoglean` passes.
-6. The installed executable reports exactly `repoglean 2.0.0`.
-7. The main RepoGlean README documents the Homebrew command.
-8. RepoGlean's full existing test suite remains green.
+8. `brew test aczarkowski/tap/repoglean` passes.
+9. The installed executable reports exactly `repoglean 2.0.0`.
+10. The main RepoGlean README documents installation, livecheck, and upgrade
+    commands.
+11. RepoGlean's full existing test suite remains green.

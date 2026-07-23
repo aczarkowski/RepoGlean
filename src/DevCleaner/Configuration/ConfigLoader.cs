@@ -17,7 +17,6 @@ public sealed record ConfigLoadResult(DevCleanerConfig? Config, string? Error)
 public static class ConfigLoader
 {
     private static readonly DevCleanerJsonContext JsonContext = new(CreateSerializerOptions());
-    private static readonly HashSet<string> SchemaProperties = new(["schemaVersion", "roots", "excludes", "disabledRules", "customRules"], StringComparer.OrdinalIgnoreCase);
 
     public static string GetDefaultPath()
     {
@@ -165,21 +164,11 @@ public static class ConfigLoader
             return true;
         }
 
-        var seenProperties = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in document.RootElement.EnumerateObject())
-        {
-            if (SchemaProperties.Contains(property.Name) && !seenProperties.Add(property.Name))
-            {
-                error = $"Duplicate schema property '{property.Name}'.";
-                return false;
-            }
-        }
-
-        if (TryGetProperty(document.RootElement, "customRules", out var customRules) && customRules.ValueKind == JsonValueKind.Array)
+        if (TryGetLastProperty(document.RootElement, "customRules", out var customRules) && customRules.ValueKind == JsonValueKind.Array)
         {
             foreach (var rule in customRules.EnumerateArray())
             {
-                if (rule.ValueKind == JsonValueKind.Object && !TryGetProperty(rule, "category", out _))
+                if (rule.ValueKind == JsonValueKind.Object && !TryGetLastProperty(rule, "category", out _))
                 {
                     error = "Each custom rule requires a category.";
                     return false;
@@ -191,19 +180,20 @@ public static class ConfigLoader
         return true;
     }
 
-    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    private static bool TryGetLastProperty(JsonElement element, string name, out JsonElement value)
     {
+        var found = false;
+        value = default;
         foreach (var property in element.EnumerateObject())
         {
             if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
             {
                 value = property.Value;
-                return true;
+                found = true;
             }
         }
 
-        value = default;
-        return false;
+        return found;
     }
 
     private static bool IsRepositoryRelativePattern(string pattern)

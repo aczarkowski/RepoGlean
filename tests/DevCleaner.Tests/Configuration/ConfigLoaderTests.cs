@@ -1,5 +1,6 @@
 using DevCleaner.Cli;
 using DevCleaner.Configuration;
+using DevCleaner.Tests.Support;
 
 namespace DevCleaner.Tests.Configuration;
 
@@ -136,18 +137,46 @@ public sealed class ConfigLoaderTests : IDisposable
     }
 
     [Fact]
-    public void Load_rejects_duplicate_case_variant_custom_rules_before_deserializing()
+    public void Load_case_variant_recognized_properties_use_the_effective_last_value()
+    {
+        var result = ConfigLoader.Load(Write("""
+            { "SCHEMAVERSION": 1, "schemaVersion": 1,
+              "ROOTS": ["first-root"], "roots": ["effective-root"],
+              "CUSTOMRULES": [{ "id": "company.first", "category": "Build", "patterns": ["**/first/**"] }],
+              "customRules": [{ "id": "company.effective", "category": "Cache", "patterns": ["**/effective/**"] }]
+            }
+            """));
+
+        Assert.True(result.IsSuccess, result.Error);
+        var config = Assert.IsType<DevCleanerConfig>(result.Config);
+        Assert.Equal(["effective-root"], config.Roots);
+        var rule = Assert.Single(config.CustomRules);
+        Assert.Equal("company.effective", rule.Id);
+        Assert.Equal(ArtifactCategory.Cache, rule.Category);
+        Assert.Equal(["**/effective/**"], rule.Patterns);
+    }
+
+    [Fact]
+    public void Load_rejects_missing_category_in_the_effective_last_case_variant_custom_rules()
     {
         var result = ConfigLoader.Load(Write("""
             { "schemaVersion": 1,
-              "customRules": [{ "id": "company.first", "category": "Build", "patterns": ["**/first/**"] }],
-              "CustomRules": [{ "id": "company.effective", "patterns": ["**/effective/**"] }]
+              "CUSTOMRULES": [{ "id": "company.first", "category": "Build", "patterns": ["**/first/**"] }],
+              "customRules": [{ "id": "company.effective", "patterns": ["**/effective/**"] }]
             }
             """));
 
         Assert.False(result.IsSuccess);
-        Assert.Contains("duplicate", result.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("customRules", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("category", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [MemberData(nameof(ConfigurationContractSamples.All), MemberType = typeof(ConfigurationContractSamples))]
+    public void Load_matches_the_shared_configuration_contract_samples(string name, string json, bool expectedValid)
+    {
+        var result = ConfigLoader.Load(Write(json));
+
+        Assert.True(result.IsSuccess == expectedValid, $"Loader result mismatch for '{name}': {result.Error}");
     }
 
     public void Dispose()

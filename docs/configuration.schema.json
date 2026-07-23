@@ -157,7 +157,12 @@
     "ruleId": {
       "description": "Stable lowercase ID that does not collide with a built-in or another custom rule.",
       "type": "string",
-      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$",
+      "allOf": [
+        {
+          "pattern": "\\S"
+        }
+      ]
     },
     "category": {
       "description": "Case-insensitive standard artifact category.",
@@ -180,7 +185,8 @@
       ],
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "pattern": "\\S"
       },
       "default": []
     },
@@ -192,6 +198,7 @@
     "repositoryRelativeGlob": {
       "type": "string",
       "minLength": 1,
+      "pattern": "\\S",
       "allOf": [
         {
           "not": {

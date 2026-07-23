@@ -89,7 +89,7 @@ The default path is `%APPDATA%\devcleaner\config.json` on Windows and `$XDG_CONF
 
 Command-line roots take precedence over configured `roots`; configured roots take precedence over the user home directory default. Command-line `--exclude` values are added to configured `excludes`. Other command-line filters narrow the discovered candidates.
 
-The published [JSON Schema](docs/configuration.schema.json) describes schema version 1. The loader accepts comments, trailing commas, case-insensitive property names and named categories, and unknown properties for forward compatibility; generated output uses canonical camelCase names. For strict JSON documents, schema-aware tooling applies the same property and value contract.
+The published [JSON Schema](docs/configuration.schema.json) describes schema version 1. The loader accepts comments, trailing commas, case-insensitive property names and named categories, and unknown properties for forward compatibility; generated output uses canonical camelCase names. If recognized properties are repeated with different casing, the last value is effective and receives the full validation policy. For strict JSON documents, schema-aware tooling applies the same property and value contract.
 
 ```json
 {
@@ -109,7 +109,7 @@ The published [JSON Schema](docs/configuration.schema.json) describes schema ver
 }
 ```
 
-Custom rule IDs are stable lowercase dotted or hyphenated identifiers. Candidate patterns are repository-relative globs without `.` or `..` path segments; `*` and `?` do not cross a path separator, while `**` spans path segments. Markers accept any non-empty glob string and are matched only against repository-relative visible paths. A custom rule needs a standard category and at least one non-empty pattern, cannot reuse a built-in ID, defaults to `preselected=false`, and is rejected if it explicitly sets `preselected=true` in v1.
+Custom rule IDs are non-whitespace, stable lowercase dotted or hyphenated identifiers. Candidate patterns are non-whitespace repository-relative globs without `.` or `..` path segments; `*` and `?` do not cross a path separator, while `**` spans path segments. Markers accept any non-whitespace glob string and are matched only against repository-relative visible paths. A custom rule needs a standard category and at least one pattern, cannot reuse a built-in ID, defaults to `preselected=false`, and is rejected if it explicitly sets `preselected=true` in v1.
 
 ## Built-in artifact catalog
 

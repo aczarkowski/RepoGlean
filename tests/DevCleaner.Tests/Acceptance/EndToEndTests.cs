@@ -233,62 +233,9 @@ public sealed class EndToEndTests
         Assert.Contains("GH_REPO: ${{ github.repository }}", release, StringComparison.Ordinal);
     }
 
-    public static TheoryData<string, bool> ConfigurationContractSamples => new()
-    {
-        {
-            """
-            {"SCHEMAVERSION":1,"futureRootOption":true,"CUSTOMRULES":[{
-              "ID":"company.generated","CATEGORY":"bUiLd","PATTERNS":["**/.generated"],
-              "MARKERS":["../accepted-marker"],"futureRuleOption":42
-            }]}
-            """,
-            true
-        },
-        {
-            """
-            {"schemaVersion":1,"customRules":[{
-              "id":"company.explicit","category":"Dependency","patterns":["**/.packages"],"markers":null,"preselected":false
-            }],"roots":null,"disabledRules":null}
-            """,
-            true
-        },
-        {
-            """
-            {"schemaVersion":1,"customRules":[{
-              "id":"company.generated","category":"Build","patterns":["**/.generated"],"preselected":true
-            }]}
-            """,
-            false
-        },
-        {
-            """
-            {"schemaVersion":1,"customRules":[{
-              "id":"company.generated","patterns":["**/.generated"]
-            }]}
-            """,
-            false
-        },
-        {
-            """
-            {"schemaVersion":1,"customRules":[{
-              "id":"company.generated","category":"Build","patterns":["../generated"]
-            }]}
-            """,
-            false
-        },
-        {
-            """
-            {"schemaVersion":1,"customRules":[{
-              "id":"company.generated","category":"Build","patterns":["**/.generated"],"markers":[""]
-            }]}
-            """,
-            false
-        },
-    };
-
     [Theory]
-    [MemberData(nameof(ConfigurationContractSamples))]
-    public async Task Published_schema_and_config_validate_accept_the_same_contract_samples(string json, bool expectedValid)
+    [MemberData(nameof(ConfigurationContractSamples.All), MemberType = typeof(ConfigurationContractSamples))]
+    public async Task Published_schema_and_config_validate_accept_the_same_contract_samples(string name, string json, bool expectedValid)
     {
         using var temporary = new TemporaryDirectory();
         var configPath = temporary.GetPath("config.json");
@@ -301,8 +248,8 @@ public sealed class EndToEndTests
         var schemaValid = schema.Evaluate(instanceDocument.RootElement).IsValid;
         var executable = await RunExecutableAsync(["config", "validate", "--config", configPath]);
 
-        Assert.Equal(expectedValid, schemaValid);
-        Assert.Equal(expectedValid ? 0 : 2, executable.ExitCode);
+        Assert.True(schemaValid == expectedValid, $"Schema result mismatch for '{name}'.");
+        Assert.True(executable.ExitCode == (expectedValid ? 0 : 2), $"Executable result mismatch for '{name}': {executable.Stderr}");
     }
 
     private static async Task<GitTestRepository> CreateRepositoryAsync(string path, int artifactBytes)

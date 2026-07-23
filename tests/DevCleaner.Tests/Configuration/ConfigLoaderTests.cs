@@ -86,6 +86,19 @@ public sealed class ConfigLoaderTests : IDisposable
         Assert.Contains(errorPart, result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Load_rejects_custom_preselected_true_instead_of_silently_discarding_it()
+    {
+        var result = ConfigLoader.Load(Write("""
+            {"schemaVersion":1,"customRules":[{
+              "id":"company.generated","category":"Build","patterns":["**/.generated"],"preselected":true
+            }]}
+            """));
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("preselected", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("/tmp/**")]
     [InlineData("C:/temp/**")]

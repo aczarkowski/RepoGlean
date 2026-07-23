@@ -111,7 +111,7 @@ public sealed class ReadOnlyCommandTests
         var configPath = temporary.GetPath("config.json");
         File.WriteAllText(configPath, """
             {"schemaVersion":1,"disabledRules":["dotnet.obj"],"customRules":[
-              {"id":"custom.generated","category":"Build","patterns":["**/.generated"],"markers":[],"preselected":true}
+              {"id":"custom.generated","category":"Build","patterns":["**/.generated"],"markers":[]}
             ]}
             """);
 

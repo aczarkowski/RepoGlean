@@ -1,98 +1,193 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "DevCleaner configuration",
-  "description": "Configuration schema for DevCleaner v1.",
+  "description": "Configuration schema for DevCleaner v1. Property names and named categories are case-insensitive; unknown properties are accepted for forward compatibility.",
   "type": "object",
   "properties": {
+    "schemaVersion": {
+      "$ref": "#/$defs/schemaVersion"
+    },
+    "roots": {
+      "$ref": "#/$defs/roots"
+    },
+    "excludes": {
+      "$ref": "#/$defs/excludes"
+    },
+    "disabledRules": {
+      "$ref": "#/$defs/disabledRules"
+    },
+    "customRules": {
+      "$ref": "#/$defs/customRules"
+    }
+  },
+  "patternProperties": {
+    "^[Ss][Cc][Hh][Ee][Mm][Aa][Vv][Ee][Rr][Ss][Ii][Oo][Nn]$": {
+      "$ref": "#/$defs/schemaVersion"
+    },
+    "^[Rr][Oo][Oo][Tt][Ss]$": {
+      "$ref": "#/$defs/roots"
+    },
+    "^[Ee][Xx][Cc][Ll][Uu][Dd][Ee][Ss]$": {
+      "$ref": "#/$defs/excludes"
+    },
+    "^[Dd][Ii][Ss][Aa][Bb][Ll][Ee][Dd][Rr][Uu][Ll][Ee][Ss]$": {
+      "$ref": "#/$defs/disabledRules"
+    },
+    "^[Cc][Uu][Ss][Tt][Oo][Mm][Rr][Uu][Ll][Ee][Ss]$": {
+      "$ref": "#/$defs/customRules"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
     "schemaVersion": {
       "description": "Configuration contract version.",
       "const": 1
     },
     "roots": {
-      "description": "Roots searched when no root is supplied on the command line.",
-      "type": "array",
+      "description": "Roots searched when no root is supplied on the command line. Null is normalized to an empty list.",
+      "type": [
+        "array",
+        "null"
+      ],
       "items": {
-        "type": "string",
-        "minLength": 1
+        "type": "string"
       },
       "default": []
     },
     "excludes": {
-      "description": "Absolute paths or root/repository-relative paths and globs excluded from discovery and scanning.",
-      "type": "array",
+      "description": "Absolute paths or root/repository-relative paths and globs excluded from discovery and scanning. Null is normalized to an empty list.",
+      "type": [
+        "array",
+        "null"
+      ],
       "items": {
-        "type": "string",
-        "minLength": 1
+        "type": "string"
       },
       "default": []
     },
     "disabledRules": {
-      "description": "Built-in rule IDs to disable.",
-      "type": "array",
+      "description": "Built-in rule IDs to disable. Null is normalized to an empty list.",
+      "type": [
+        "array",
+        "null"
+      ],
       "items": {
-        "type": "string",
-        "minLength": 1
+        "type": "string"
       },
-      "uniqueItems": true,
       "default": []
     },
     "customRules": {
-      "description": "Additional repository-relative artifact rules. Custom rules are never preselected in v1.",
-      "type": "array",
+      "description": "Additional artifact rules. Null is normalized to an empty list; custom rules are never preselected in v1.",
+      "type": [
+        "array",
+        "null"
+      ],
       "items": {
         "$ref": "#/$defs/customRule"
       },
       "default": []
-    }
-  },
-  "additionalProperties": false,
-  "$defs": {
+    },
     "customRule": {
       "type": "object",
-      "required": [
-        "id",
-        "category",
-        "patterns"
+      "allOf": [
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[Ii][Dd]$"
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[Cc][Aa][Tt][Ee][Gg][Oo][Rr][Yy]$"
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[Pp][Aa][Tt][Tt][Ee][Rr][Nn][Ss]$"
+              }
+            }
+          }
+        }
       ],
       "properties": {
         "id": {
-          "description": "Stable lowercase ID that does not collide with a built-in or another custom rule.",
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+          "$ref": "#/$defs/ruleId"
         },
         "category": {
-          "description": "Standard artifact category.",
-          "enum": [
-            "Build",
-            "Cache",
-            "Test",
-            "Ide",
-            "Dependency"
-          ]
+          "$ref": "#/$defs/category"
         },
         "patterns": {
-          "description": "One or more non-empty repository-relative candidate globs without dot segments.",
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/repositoryRelativeGlob"
-          }
+          "$ref": "#/$defs/patterns"
         },
         "markers": {
-          "description": "Optional repository-relative globs; at least one visible marker activates the rule.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/repositoryRelativeGlob"
-          },
-          "default": []
+          "$ref": "#/$defs/markers"
         },
         "preselected": {
-          "description": "Custom rules cannot be preselected in v1.",
-          "const": false,
-          "default": false
+          "$ref": "#/$defs/preselected"
         }
       },
-      "additionalProperties": false
+      "patternProperties": {
+        "^[Ii][Dd]$": {
+          "$ref": "#/$defs/ruleId"
+        },
+        "^[Cc][Aa][Tt][Ee][Gg][Oo][Rr][Yy]$": {
+          "$ref": "#/$defs/category"
+        },
+        "^[Pp][Aa][Tt][Tt][Ee][Rr][Nn][Ss]$": {
+          "$ref": "#/$defs/patterns"
+        },
+        "^[Mm][Aa][Rr][Kk][Ee][Rr][Ss]$": {
+          "$ref": "#/$defs/markers"
+        },
+        "^[Pp][Rr][Ee][Ss][Ee][Ll][Ee][Cc][Tt][Ee][Dd]$": {
+          "$ref": "#/$defs/preselected"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ruleId": {
+      "description": "Stable lowercase ID that does not collide with a built-in or another custom rule.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+    },
+    "category": {
+      "description": "Case-insensitive standard artifact category.",
+      "type": "string",
+      "pattern": "^(?:[Bb][Uu][Ii][Ll][Dd]|[Cc][Aa][Cc][Hh][Ee]|[Tt][Ee][Ss][Tt]|[Ii][Dd][Ee]|[Dd][Ee][Pp][Ee][Nn][Dd][Ee][Nn][Cc][Yy])$"
+    },
+    "patterns": {
+      "description": "One or more non-empty repository-relative candidate globs without dot segments.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/repositoryRelativeGlob"
+      }
+    },
+    "markers": {
+      "description": "Optional non-empty glob strings evaluated against repository-relative visible paths. Null is normalized to an empty list.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": []
+    },
+    "preselected": {
+      "description": "Custom rules cannot be preselected in v1.",
+      "const": false,
+      "default": false
     },
     "repositoryRelativeGlob": {
       "type": "string",

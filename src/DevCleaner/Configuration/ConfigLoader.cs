@@ -128,6 +128,12 @@ public static class ConfigLoader
                 return false;
             }
 
+            if (rule.Preselected)
+            {
+                error = $"Custom rule '{rule.Id}' cannot set preselected to true in schema version 1.";
+                return false;
+            }
+
             if (!ids.Add(rule.Id))
             {
                 error = $"Duplicate custom rule id '{rule.Id}'.";

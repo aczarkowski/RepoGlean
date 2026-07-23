@@ -6,6 +6,24 @@ RepoGlean 2.0.0 is a .NET 10 Native AOT executable for Windows, macOS, and Linux
 
 ## Install
 
+### Homebrew
+
+On macOS or Linux:
+
+```bash
+brew install aczarkowski/tap/repoglean
+```
+
+Check for a newer stable release and upgrade with:
+
+```bash
+brew livecheck aczarkowski/tap/repoglean
+brew update
+brew upgrade repoglean
+```
+
+### Release archives
+
 Download the archive for the machine that will run RepoGlean:
 
 | Operating system | x64 | Arm64 |

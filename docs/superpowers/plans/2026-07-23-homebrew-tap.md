@@ -14,7 +14,8 @@
 - Publish the formula as `Formula/repoglean.rb` and install it with `brew install aczarkowski/tap/repoglean`.
 - Support exactly macOS ARM64/x64 and Linux ARM64/x64 using immutable tagged release archives.
 - RepoGlean version `2.0.0` and the four SHA-256 values must match the approved design specification exactly.
-- Declare Homebrew `git` as a runtime dependency.
+- Declare `uses_from_macos "git"` so macOS uses its provided Git and Linux
+  receives Homebrew `git`.
 - `brew livecheck aczarkowski/tap/repoglean` must use GitHub's latest stable release.
 - Update checks run daily at `06:17 UTC` and through `workflow_dispatch`.
 - Automation validates a stable semantic-version tag, all eight required assets, and 64-character lowercase hexadecimal checksums.
@@ -175,11 +176,13 @@ class RepoGleanFormulaTest < Minitest::Test
       assert_includes rendered, "https://example.test/repoglean-#{rid}.tar.gz"
       assert_includes rendered, SHA256.fetch(rid)
     end
-    assert_includes rendered, 'depends_on "git"'
+    assert_includes rendered, 'uses_from_macos "git"'
+    refute_includes rendered, 'depends_on "git"'
     assert_includes rendered, "strategy :github_latest"
     assert_includes rendered, 'assert_equal "repoglean #{version}\\n"'
     assert_operator rendered.index("livecheck do"), :<, rendered.index("on_macos do")
-    assert_operator rendered.index('depends_on "git"'), :<, rendered.index("on_macos do")
+    assert_includes rendered, 'bin.install "repoglean"'
+    assert_operator rendered.index('uses_from_macos "git"'), :<, rendered.index("on_macos do")
 
     Dir.mktmpdir do |directory|
       path = File.join(directory, "repoglean.rb")
@@ -251,7 +254,7 @@ module RepoGleanFormula
           strategy :github_latest
         end
 
-        depends_on "git"
+        uses_from_macos "git"
 
         on_macos do
           if Hardware::CPU.arm?
@@ -274,12 +277,7 @@ module RepoGleanFormula
         end
 
         def install
-          rid = if OS.mac?
-            Hardware::CPU.arm? ? "osx-arm64" : "osx-x64"
-          else
-            Hardware::CPU.arm? ? "linux-arm64" : "linux-x64"
-          end
-          bin.install "repoglean-\#{rid}/repoglean"
+          bin.install "repoglean"
         end
 
         test do
@@ -476,6 +474,8 @@ def get(url, redirects_remaining = 5)
   request["Accept"] = "application/vnd.github+json"
   request["X-GitHub-Api-Version"] = "2022-11-28"
   request["User-Agent"] = "aczarkowski-homebrew-tap"
+  token = ENV.fetch("GITHUB_TOKEN", nil)
+  request["Authorization"] = "Bearer #{token}" if token && !token.empty?
   response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https") do |http|
     http.request(request)
   end
@@ -659,6 +659,8 @@ jobs:
 
       - name: Update formula
         id: update
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           script/update-repoglean
           if git diff --quiet -- Formula/repoglean.rb; then

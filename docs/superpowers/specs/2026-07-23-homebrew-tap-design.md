@@ -43,7 +43,8 @@ Homebrew derives the formula class from `repoglean.rb`, so
 - homepage: `https://github.com/aczarkowski/RepoGlean`
 - version: `2.0.0`
 - license: `MIT`
-- runtime dependency: Homebrew `git`
+- runtime dependency: `uses_from_macos "git"` so macOS uses its provided Git
+  and Linux receives Homebrew `git`
 
 The formula installs the existing precompiled, self-contained executable. It
 selects exactly one archive using Homebrew's operating-system and CPU
@@ -56,8 +57,9 @@ conditionals:
 | Linux ARM64 | `repoglean-linux-arm64.tar.gz` | `b52b95dcb2b24d99862fd82deb132144a18b51b9fe2e2344aa9b7b9d7695cc20` |
 | Linux x64 | `repoglean-linux-x64.tar.gz` | `3731f411e7227b092d0098e1cb89de08208096bd3b95b774a389e2a2fd9aba96` |
 
-Each archive has a single top-level `repoglean-<rid>` directory. The formula's
-install method places its `repoglean` executable in Homebrew's `bin`.
+Each archive has a single top-level `repoglean-<rid>` directory. Homebrew enters
+that single directory before calling `install`, so the formula places the
+staged `repoglean` executable directly in Homebrew's `bin`.
 
 The formula test runs:
 

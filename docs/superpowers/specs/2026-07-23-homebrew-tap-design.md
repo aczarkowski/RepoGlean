@@ -125,8 +125,9 @@ branch and opens a pull request in `aczarkowski/homebrew-tap`. It never pushes a
 version change directly to `master`.
 
 The workflow needs only the tap repository's scoped `GITHUB_TOKEN` with
-`contents: write` and `pull-requests: write`. Reading RepoGlean's public release
-metadata and assets does not require a cross-repository credential.
+`contents: write` and `pull-requests: write`. It also sends that token when
+reading RepoGlean's public release metadata to avoid anonymous API rate limits;
+no cross-repository credential or additional secret is required.
 
 The tap maintainer reviews and merges the update pull request. Users receive the
 new formula through their next `brew update`, after which `brew outdated` and

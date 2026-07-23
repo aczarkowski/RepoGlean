@@ -606,6 +606,7 @@ source = File.read(workflow_path)
 refute_includes source, "secrets."
 refute_includes source, "push origin master"
 %w[
+  gem\ install\ webrick\ --no-document
   test/repoglean_formula_test.rb
   script/update-repoglean
   brew\ style
@@ -653,6 +654,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install updater test dependency
+        run: gem install webrick --no-document
 
       - name: Test updater
         run: ruby -Ilib test/repoglean_formula_test.rb

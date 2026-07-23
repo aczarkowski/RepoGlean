@@ -8,13 +8,15 @@ public sealed class GitClientTests
     [Fact]
     public async Task Visible_file_evaluation_always_excludes_the_reserved_repository_local_quarantine_namespace()
     {
+        Assert.Equal(".repoglean-quarantine-", GitClient.QuarantineDirectoryPrefix);
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "obj/\n");
         repository.Write("project.csproj", "<Project />");
         await repository.CommitAllAsync();
         repository.Write("obj/quarantined-marker.csproj", "<Project />");
-        var quarantineRelativePath = ".devcleaner-quarantine-0123456789abcdef";
+        var quarantineRelativePath = ".repoglean-quarantine-0123456789abcdef";
         var quarantinePath = repository.GetPath(quarantineRelativePath);
         Directory.CreateDirectory(quarantinePath);
         Directory.Move(repository.GetPath("obj"), Path.Combine(quarantinePath, "payload"));

@@ -114,7 +114,7 @@ public sealed class ConfigLoaderTests : IDisposable
         var path = ConfigLoader.GetDefaultPath();
 
         Assert.Equal("config.json", Path.GetFileName(path));
-        Assert.Equal("devcleaner", Path.GetFileName(Path.GetDirectoryName(path)!));
+        Assert.Equal("repoglean", Path.GetFileName(Path.GetDirectoryName(path)!));
         if (OperatingSystem.IsWindows())
         {
             Assert.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), path, StringComparison.OrdinalIgnoreCase);

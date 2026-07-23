@@ -34,6 +34,22 @@ public static class ConfigurationContractSamples
             true
         },
         {
+            "invalid schemaVersion occurrence followed by valid",
+            """
+            {"SCHEMAVERSION":2,"schemaVersion":1}
+            """,
+            false
+        },
+        {
+            "invalid customRules occurrence followed by valid",
+            """
+            {"schemaVersion":1,
+             "CUSTOMRULES":[{"id":"company.invalid","category":"Build","patterns":["**/invalid"],"preselected":true}],
+             "customRules":[{"id":"company.valid","category":"Build","patterns":["**/valid"]}]}
+            """,
+            false
+        },
+        {
             "preselected true",
             """
             {"schemaVersion":1,"customRules":[{

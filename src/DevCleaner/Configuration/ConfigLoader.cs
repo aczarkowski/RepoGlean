@@ -43,7 +43,7 @@ public static class ConfigLoader
         try
         {
             var json = File.ReadAllText(resolvedPath);
-            if (!HasRequiredCustomRuleProperties(json, out var propertyError)) return ConfigLoadResult.Failure(propertyError);
+            if (!ValidateRecognizedOccurrences(json, out var propertyError)) return ConfigLoadResult.Failure(propertyError);
             config = JsonSerializer.Deserialize(json, JsonContext.DevCleanerConfig);
         }
         catch (JsonException exception)
@@ -150,7 +150,7 @@ public static class ConfigLoader
         return true;
     }
 
-    private static bool HasRequiredCustomRuleProperties(string json, out string error)
+    private static bool ValidateRecognizedOccurrences(string json, out string error)
     {
         using var document = JsonDocument.Parse(json, new JsonDocumentOptions
         {
@@ -160,19 +160,39 @@ public static class ConfigLoader
 
         if (document.RootElement.ValueKind != JsonValueKind.Object)
         {
-            error = string.Empty;
-            return true;
+            error = "The configuration root must be an object.";
+            return false;
         }
 
-        if (TryGetLastProperty(document.RootElement, "customRules", out var customRules) && customRules.ValueKind == JsonValueKind.Array)
+        foreach (var property in document.RootElement.EnumerateObject())
         {
-            foreach (var rule in customRules.EnumerateArray())
+            if (NameEquals(property, "schemaVersion") && !IsSchemaVersion(property.Value))
             {
-                if (rule.ValueKind == JsonValueKind.Object && !TryGetLastProperty(rule, "category", out _))
-                {
-                    error = "Each custom rule requires a category.";
-                    return false;
-                }
+                error = "Every schemaVersion occurrence must be 1.";
+                return false;
+            }
+
+            if (NameEquals(property, "roots") && !IsNullableStringArray(property.Value))
+            {
+                error = "Every roots occurrence must be null or an array of strings.";
+                return false;
+            }
+
+            if (NameEquals(property, "excludes") && !IsNullableStringArray(property.Value))
+            {
+                error = "Every excludes occurrence must be null or an array of strings.";
+                return false;
+            }
+
+            if (NameEquals(property, "disabledRules") && !IsNullableStringArray(property.Value))
+            {
+                error = "Every disabledRules occurrence must be null or an array of strings.";
+                return false;
+            }
+
+            if (NameEquals(property, "customRules") && !ValidateCustomRulesOccurrence(property.Value, out error))
+            {
+                return false;
             }
         }
 
@@ -180,21 +200,130 @@ public static class ConfigLoader
         return true;
     }
 
-    private static bool TryGetLastProperty(JsonElement element, string name, out JsonElement value)
+    private static bool ValidateCustomRulesOccurrence(JsonElement value, out string error)
     {
-        var found = false;
-        value = default;
-        foreach (var property in element.EnumerateObject())
+        if (value.ValueKind == JsonValueKind.Null)
         {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            error = string.Empty;
+            return true;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            error = "Every customRules occurrence must be null or an array of rule objects.";
+            return false;
+        }
+
+        foreach (var rule in value.EnumerateArray())
+        {
+            if (!ValidateCustomRuleOccurrence(rule, out error))
             {
-                value = property.Value;
-                found = true;
+                return false;
             }
         }
 
-        return found;
+        error = string.Empty;
+        return true;
     }
+
+    private static bool ValidateCustomRuleOccurrence(JsonElement rule, out string error)
+    {
+        if (rule.ValueKind != JsonValueKind.Object)
+        {
+            error = "Every custom rule must be an object.";
+            return false;
+        }
+
+        var hasId = false;
+        var hasCategory = false;
+        var hasPatterns = false;
+
+        foreach (var property in rule.EnumerateObject())
+        {
+            if (NameEquals(property, "id"))
+            {
+                hasId = true;
+                if (property.Value.ValueKind != JsonValueKind.String || !ArtifactRule.IsValidId(property.Value.GetString()))
+                {
+                    error = "Every custom rule id occurrence must be a valid id.";
+                    return false;
+                }
+            }
+            else if (NameEquals(property, "category"))
+            {
+                hasCategory = true;
+                if (property.Value.ValueKind != JsonValueKind.String ||
+                    !Enum.GetNames<ArtifactCategory>().Contains(property.Value.GetString(), StringComparer.OrdinalIgnoreCase))
+                {
+                    error = "Every custom rule category occurrence must name a standard category.";
+                    return false;
+                }
+            }
+            else if (NameEquals(property, "patterns"))
+            {
+                hasPatterns = true;
+                if (!IsValidPatterns(property.Value))
+                {
+                    error = "Every custom rule patterns occurrence must contain one or more safe, non-empty repository-relative patterns.";
+                    return false;
+                }
+            }
+            else if (NameEquals(property, "markers") && !IsValidMarkers(property.Value))
+            {
+                error = "Every custom rule markers occurrence must be null or an array of non-empty patterns.";
+                return false;
+            }
+            else if (NameEquals(property, "preselected") && property.Value.ValueKind != JsonValueKind.False)
+            {
+                error = "Every custom rule preselected occurrence must be false in schema version 1.";
+                return false;
+            }
+        }
+
+        if (!hasId)
+        {
+            error = "Each custom rule requires an id.";
+            return false;
+        }
+
+        if (!hasCategory)
+        {
+            error = "Each custom rule requires a category.";
+            return false;
+        }
+
+        if (!hasPatterns)
+        {
+            error = "Each custom rule requires patterns.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool IsSchemaVersion(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var version) && version == 1;
+
+    private static bool IsNullableStringArray(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Null ||
+        value.ValueKind == JsonValueKind.Array && value.EnumerateArray().All(item => item.ValueKind == JsonValueKind.String);
+
+    private static bool IsValidPatterns(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Array &&
+        value.GetArrayLength() > 0 &&
+        value.EnumerateArray().All(item =>
+            item.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(item.GetString()) &&
+            IsRepositoryRelativePattern(item.GetString()!));
+
+    private static bool IsValidMarkers(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Null ||
+        value.ValueKind == JsonValueKind.Array && value.EnumerateArray().All(item =>
+            item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()));
+
+    private static bool NameEquals(JsonProperty property, string name) =>
+        string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsRepositoryRelativePattern(string pattern)
     {

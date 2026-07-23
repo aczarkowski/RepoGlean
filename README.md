@@ -89,7 +89,7 @@ The default path is `%APPDATA%\devcleaner\config.json` on Windows and `$XDG_CONF
 
 Command-line roots take precedence over configured `roots`; configured roots take precedence over the user home directory default. Command-line `--exclude` values are added to configured `excludes`. Other command-line filters narrow the discovered candidates.
 
-The published [JSON Schema](docs/configuration.schema.json) describes schema version 1. The loader accepts comments, trailing commas, case-insensitive property names and named categories, and unknown properties for forward compatibility; generated output uses canonical camelCase names. If recognized properties are repeated with different casing, the last value is effective and receives the full validation policy. For strict JSON documents, schema-aware tooling applies the same property and value contract.
+The published [JSON Schema](docs/configuration.schema.json) describes schema version 1. The loader accepts comments, trailing commas, case-insensitive property names and named categories, and unknown properties for forward compatibility; generated output uses canonical camelCase names. If recognized properties are repeated with different casing, the last valid value wins; all occurrences must be valid. For strict JSON documents, schema-aware tooling applies the same property and value contract.
 
 ```json
 {

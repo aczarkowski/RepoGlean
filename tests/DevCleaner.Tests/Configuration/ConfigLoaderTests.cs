@@ -143,7 +143,11 @@ public sealed class ConfigLoaderTests : IDisposable
             { "SCHEMAVERSION": 1, "schemaVersion": 1,
               "ROOTS": ["first-root"], "roots": ["effective-root"],
               "CUSTOMRULES": [{ "id": "company.first", "category": "Build", "patterns": ["**/first/**"] }],
-              "customRules": [{ "id": "company.effective", "category": "Cache", "patterns": ["**/effective/**"] }]
+              "customRules": [{
+                "ID": "company.shadowed", "id": "company.effective",
+                "CATEGORY": "Build", "category": "Cache",
+                "PATTERNS": ["**/shadowed/**"], "patterns": ["**/effective/**"]
+              }]
             }
             """));
 
@@ -154,6 +158,24 @@ public sealed class ConfigLoaderTests : IDisposable
         Assert.Equal("company.effective", rule.Id);
         Assert.Equal(ArtifactCategory.Cache, rule.Category);
         Assert.Equal(["**/effective/**"], rule.Patterns);
+    }
+
+    [Fact]
+    public void Load_rejects_an_invalid_shadowed_custom_rule_member_occurrence()
+    {
+        var result = ConfigLoader.Load(Write("""
+            { "schemaVersion": 1,
+              "customRules": [{
+                "ID": "bad id",
+                "id": "company.generated",
+                "category": "Build",
+                "patterns": ["**/generated/**"]
+              }]
+            }
+            """));
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("id", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

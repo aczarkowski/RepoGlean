@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $executable = (Resolve-Path -LiteralPath $ExecutablePath).Path
-$smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("devcleaner-native-smoke-" + [Guid]::NewGuid().ToString("N"))
+$smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("repoglean-native-smoke-" + [Guid]::NewGuid().ToString("N"))
 $repository = Join-Path $smokeRoot "repository"
 $previousGlobalConfig = $env:GIT_CONFIG_GLOBAL
 $previousNoSystemConfig = $env:GIT_CONFIG_NOSYSTEM
@@ -25,11 +25,11 @@ function Invoke-JsonCommand {
         $exitCode = $LASTEXITCODE
         $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { "" }
         if ($exitCode -ne 0) {
-            throw "DevCleaner exited $exitCode. stderr: $stderr stdout: $($stdout -join [Environment]::NewLine)"
+            throw "RepoGlean exited $exitCode. stderr: $stderr stdout: $($stdout -join [Environment]::NewLine)"
         }
 
         if (-not [string]::IsNullOrWhiteSpace($stderr)) {
-            throw "DevCleaner wrote unexpected stderr: $stderr"
+            throw "RepoGlean wrote unexpected stderr: $stderr"
         }
 
         return (($stdout -join [Environment]::NewLine) | ConvertFrom-Json -Depth 32)
@@ -72,8 +72,8 @@ try {
 
     & git -C $repository init --quiet
     if ($LASTEXITCODE -ne 0) { throw "git init failed." }
-    & git -C $repository config user.email "devcleaner-smoke@example.invalid"
-    & git -C $repository config user.name "DevCleaner Smoke"
+    & git -C $repository config user.email "repoglean-smoke@example.invalid"
+    & git -C $repository config user.name "RepoGlean Smoke"
 
     New-Item -ItemType Directory -Path (Join-Path $repository "tracked") -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $repository ".gitignore") -Value "obj/`nnode_modules/"

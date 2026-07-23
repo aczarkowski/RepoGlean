@@ -386,7 +386,7 @@ public static class RepoGleanApp
         var assembly = typeof(RepoGleanApp).Assembly;
         var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
         if (!string.IsNullOrWhiteSpace(informational)) return informational.Split('+')[0];
-        return assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+        return assembly.GetName().Version?.ToString(3) ?? "2.0.0";
     }
 
     private static void WriteHelp(TextWriter output)

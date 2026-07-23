@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "DevCleaner configuration",
-  "description": "Configuration schema for DevCleaner v1. Property names and named categories are case-insensitive; unknown properties are accepted for forward compatibility.",
+  "title": "RepoGlean configuration",
+  "description": "Configuration schema version 1 for RepoGlean. Property names and named categories are case-insensitive; unknown properties are accepted for forward compatibility.",
   "type": "object",
   "properties": {
     "schemaVersion": {
@@ -77,7 +77,7 @@
       "default": []
     },
     "customRules": {
-      "description": "Additional artifact rules. Null is normalized to an empty list; custom rules are never preselected in v1.",
+      "description": "Additional artifact rules. Null is normalized to an empty list; custom rules are never preselected in schema version 1.",
       "type": [
         "array",
         "null"
@@ -191,7 +191,7 @@
       "default": []
     },
     "preselected": {
-      "description": "Custom rules cannot be preselected in v1.",
+      "description": "Custom rules cannot be preselected in schema version 1.",
       "const": false,
       "default": false
     },

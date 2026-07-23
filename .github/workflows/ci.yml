@@ -19,18 +19,18 @@ jobs:
         include:
           - runner: windows-latest
             rid: win-x64
-            executable: DevCleaner.exe
-            package_executable: devcleaner.exe
+            executable: RepoGlean.exe
+            package_executable: repoglean.exe
             smoke_args: ""
           - runner: macos-latest
             rid: osx-arm64
-            executable: DevCleaner
-            package_executable: devcleaner
+            executable: RepoGlean
+            package_executable: repoglean
             smoke_args: ""
           - runner: ubuntu-24.04
             rid: linux-x64
-            executable: DevCleaner
-            package_executable: devcleaner
+            executable: RepoGlean
+            package_executable: repoglean
             smoke_args: -RequireLinuxBaseline
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -44,17 +44,17 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore once
-        run: dotnet restore DevCleaner.slnx -r "${{ matrix.rid }}"
+        run: dotnet restore RepoGlean.slnx -r "${{ matrix.rid }}"
 
       - name: Build with warnings as errors
-        run: dotnet build DevCleaner.slnx --no-restore -warnaserror
+        run: dotnet build RepoGlean.slnx --no-restore -warnaserror
 
       - name: Test
-        run: dotnet test DevCleaner.slnx --no-build
+        run: dotnet test RepoGlean.slnx --no-build
 
       - name: Publish host Native AOT executable
         run: >-
-          dotnet publish src/DevCleaner/DevCleaner.csproj
+          dotnet publish src/RepoGlean/RepoGlean.csproj
           -c Release
           -r "${{ matrix.rid }}"
           --self-contained
@@ -68,7 +68,7 @@ jobs:
           EXECUTABLE: ${{ matrix.executable }}
           PACKAGE_EXECUTABLE: ${{ matrix.package_executable }}
         run: |
-          package="artifacts/package/devcleaner-${RID}"
+          package="artifacts/package/repoglean-${RID}"
           mkdir -p "$package"
           cp "artifacts/native/${RID}/${EXECUTABLE}" "$package/${PACKAGE_EXECUTABLE}"
           cp LICENSE README.md "$package/"
@@ -76,5 +76,5 @@ jobs:
       - name: Smoke-test packaged executable
         run: >-
           pwsh -NoProfile -File eng/native-smoke.ps1
-          -ExecutablePath "artifacts/package/devcleaner-${{ matrix.rid }}/${{ matrix.package_executable }}"
+          -ExecutablePath "artifacts/package/repoglean-${{ matrix.rid }}/${{ matrix.package_executable }}"
           ${{ matrix.smoke_args }}

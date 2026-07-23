@@ -217,8 +217,8 @@ public sealed class EndToEndTests
         Assert.Equal(0, executableHelp.ExitCode);
         Assert.Contains("--config", executableHelp.Stdout, StringComparison.Ordinal);
         Assert.Contains("--no-progress", executableHelp.Stdout, StringComparison.Ordinal);
-        Assert.True(File.Exists(readmePath), "README.md must document the supported v1 surface.");
-        Assert.True(File.Exists(schemaPath), "The v1 configuration JSON Schema must be published.");
+        Assert.True(File.Exists(readmePath), "README.md must document the supported RepoGlean surface.");
+        Assert.True(File.Exists(schemaPath), "The configuration JSON Schema must be published.");
         Assert.True(File.Exists(ciPath), "The cross-platform CI workflow must be published.");
         Assert.True(File.Exists(releasePath), "The Native AOT release workflow must be published.");
         Assert.True(File.Exists(smokePath), "The reusable packaged-executable smoke script must be published.");

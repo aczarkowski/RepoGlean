@@ -29,7 +29,7 @@ This is a clean break. DevCleaner v1 has no users requiring migration.
 - Do not read or migrate `devcleaner/config.json`.
 - Do not recognize `.devcleaner-quarantine-*` as a RepoGlean-owned namespace.
 - Do not retain DevCleaner names in active source, tests, workflows, schema metadata, executable output, or current documentation.
-- Historical implementation plans and specifications remain unchanged because they document the DevCleaner v1 work as it occurred.
+- Historical implementation plans, specifications, and `.superpowers/sdd` review reports remain unchanged because they document the DevCleaner v1 work as it occurred.
 - Leave the existing remote `v1` tag and release immutable as historical evidence.
 
 ## Versioning and release
@@ -56,7 +56,7 @@ The JSON document contract remains schema version 1 because its fields and seman
 The rename is accepted only when:
 
 1. Rename-specific tests first fail against the DevCleaner implementation and then pass against RepoGlean.
-2. Active files outside historical `docs/superpowers/plans` and `docs/superpowers/specs` contain no case-insensitive `devcleaner` occurrence.
+2. Active files outside historical `docs/superpowers/plans`, `docs/superpowers/specs`, and `.superpowers/sdd` reports contain no case-insensitive `devcleaner` occurrence.
 3. `dotnet restore RepoGlean.slnx`, warning-as-error build, and the full test suite pass.
 4. Configuration contract/schema parity tests pass.
 5. Native AOT package smokes pass locally for macOS Arm64 and x64/Rosetta.

@@ -16,7 +16,7 @@
 - Default configuration directory is exactly `repoglean`.
 - Private quarantine prefix is exactly `.repoglean-quarantine-`.
 - Do not add DevCleaner aliases, legacy configuration fallback, or legacy quarantine recognition.
-- Historical files below `docs/superpowers/plans` and `docs/superpowers/specs` remain unchanged.
+- Historical files below `docs/superpowers/plans`, `docs/superpowers/specs`, and `.superpowers/sdd` remain unchanged.
 - JSON schema version and output field semantics remain version 1.
 - Existing remote `v1` tag and release remain immutable.
 - First RepoGlean release is exactly `v2.0.0`.
@@ -185,6 +185,9 @@ Run:
 
 ```bash
 rg -n -i 'devcleaner' \
+  --hidden \
+  --glob '!.git' \
+  --glob '!.superpowers/sdd/**' \
   --glob '!docs/superpowers/plans/**' \
   --glob '!docs/superpowers/specs/**'
 ```

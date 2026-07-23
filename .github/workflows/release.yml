@@ -17,33 +17,33 @@ jobs:
         include:
           - runner: windows-latest
             rid: win-x64
-            executable: DevCleaner.exe
-            package_executable: devcleaner.exe
+            executable: RepoGlean.exe
+            package_executable: repoglean.exe
             smoke_args: ""
           - runner: windows-11-arm
             rid: win-arm64
-            executable: DevCleaner.exe
-            package_executable: devcleaner.exe
+            executable: RepoGlean.exe
+            package_executable: repoglean.exe
             smoke_args: ""
           - runner: macos-15-intel
             rid: osx-x64
-            executable: DevCleaner
-            package_executable: devcleaner
+            executable: RepoGlean
+            package_executable: repoglean
             smoke_args: ""
           - runner: macos-15
             rid: osx-arm64
-            executable: DevCleaner
-            package_executable: devcleaner
+            executable: RepoGlean
+            package_executable: repoglean
             smoke_args: ""
           - runner: ubuntu-24.04
             rid: linux-x64
-            executable: DevCleaner
-            package_executable: devcleaner
+            executable: RepoGlean
+            package_executable: repoglean
             smoke_args: -RequireLinuxBaseline
           - runner: ubuntu-24.04-arm
             rid: linux-arm64
-            executable: DevCleaner
-            package_executable: devcleaner
+            executable: RepoGlean
+            package_executable: repoglean
             smoke_args: -RequireLinuxBaseline
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -57,11 +57,11 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore once
-        run: dotnet restore src/DevCleaner/DevCleaner.csproj -r "${{ matrix.rid }}"
+        run: dotnet restore src/RepoGlean/RepoGlean.csproj -r "${{ matrix.rid }}"
 
       - name: Publish matching-architecture Native AOT executable
         run: >-
-          dotnet publish src/DevCleaner/DevCleaner.csproj
+          dotnet publish src/RepoGlean/RepoGlean.csproj
           -c Release
           -r "${{ matrix.rid }}"
           --self-contained
@@ -76,7 +76,7 @@ jobs:
           EXECUTABLE: ${{ matrix.executable }}
           PACKAGE_EXECUTABLE: ${{ matrix.package_executable }}
         run: |
-          package="artifacts/package/devcleaner-${RID}"
+          package="artifacts/package/repoglean-${RID}"
           mkdir -p "$package"
           cp "artifacts/native/${RID}/${EXECUTABLE}" "$package/${PACKAGE_EXECUTABLE}"
           cp LICENSE README.md "$package/"
@@ -84,16 +84,16 @@ jobs:
       - name: Smoke-test packaged executable
         run: >-
           pwsh -NoProfile -File eng/native-smoke.ps1
-          -ExecutablePath "artifacts/package/devcleaner-${{ matrix.rid }}/${{ matrix.package_executable }}"
+          -ExecutablePath "artifacts/package/repoglean-${{ matrix.rid }}/${{ matrix.package_executable }}"
           ${{ matrix.smoke_args }}
 
       - name: Archive release package and checksum
         env:
           RID: ${{ matrix.rid }}
         run: |
-          archive_name="devcleaner-${RID}.tar.gz"
+          archive_name="repoglean-${RID}.tar.gz"
           archive="artifacts/${archive_name}"
-          tar -czf "$archive" -C artifacts/package "devcleaner-${RID}"
+          tar -czf "$archive" -C artifacts/package "repoglean-${RID}"
           if command -v sha256sum >/dev/null 2>&1; then
             (cd artifacts && sha256sum "$archive_name" > "$archive_name.sha256")
           else
@@ -103,10 +103,10 @@ jobs:
       - name: Upload release archive and checksum
         uses: actions/upload-artifact@v7
         with:
-          name: devcleaner-${{ matrix.rid }}
+          name: repoglean-${{ matrix.rid }}
           path: |
-            artifacts/devcleaner-${{ matrix.rid }}.tar.gz
-            artifacts/devcleaner-${{ matrix.rid }}.tar.gz.sha256
+            artifacts/repoglean-${{ matrix.rid }}.tar.gz
+            artifacts/repoglean-${{ matrix.rid }}.tar.gz.sha256
           if-no-files-found: error
 
   publish-release:
@@ -116,7 +116,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v5
         with:
-          pattern: devcleaner-*
+          pattern: repoglean-*
           path: artifacts
           merge-multiple: true
 

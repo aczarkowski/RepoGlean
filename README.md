@@ -193,3 +193,4 @@ dotnet publish src/DevCleaner/DevCleaner.csproj -c Release -r osx-arm64 --self-c
 ```
 
 CI runs the warning-as-error build, full tests, and `eng/native-smoke.ps1` against the final package-named host Native AOT executable on Windows, macOS, and Linux. The smoke creates a disposable real Git repository, parses JSON scan and scoped-clean results, and proves protected content survives. A `v*` tag runs the same packaged-executable smoke for all six release RIDs on matching-architecture runners before archiving the executable with `LICENSE` and `README.md`, generating SHA-256 files, and attaching everything to the GitHub release.
+

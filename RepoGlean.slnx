@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RepoGlean/RepoGlean.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RepoGlean.Tests/RepoGlean.Tests.csproj" />
+  </Folder>
+</Solution>

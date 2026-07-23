@@ -1,0 +1,40 @@
+using RepoGlean.Rules;
+using RepoGlean.Scanning;
+
+namespace RepoGlean.Cleaning;
+
+public enum CleanupOutcome
+{
+    Deleted,
+    Skipped,
+    Failed,
+}
+
+public sealed record CleanupCandidateResult(
+    ArtifactCandidate Candidate,
+    CleanupOutcome Outcome,
+    string Message,
+    bool DeletionCompleted = false);
+
+public sealed record CleanupRequest(
+    IReadOnlyList<ArtifactCandidate> Candidates,
+    IReadOnlyList<string> RequestedRoots,
+    RuleCatalog RuleCatalog,
+    bool DryRun);
+
+public sealed record CleanupResult(
+    IReadOnlyList<CleanupCandidateResult> Items,
+    bool DryRun,
+    bool IsInterrupted,
+    long SelectedCount)
+{
+    public long DeletedCount => Items.LongCount(item => item.DeletionCompleted);
+
+    public long SkippedCount => Items.LongCount(item => item.Outcome == CleanupOutcome.Skipped);
+
+    public long FailedCount => Items.LongCount(item => item.Outcome == CleanupOutcome.Failed);
+
+    public long EstimatedDeletedBytes => Items
+        .Where(item => item.DeletionCompleted)
+        .Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.EstimatedBytes));
+}

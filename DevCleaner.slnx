@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/DevCleaner/DevCleaner.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/DevCleaner.Tests/DevCleaner.Tests.csproj" />
-  </Folder>
-</Solution>

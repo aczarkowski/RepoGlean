@@ -20,12 +20,18 @@ jobs:
           - runner: windows-latest
             rid: win-x64
             executable: DevCleaner.exe
+            package_executable: devcleaner.exe
+            smoke_args: ""
           - runner: macos-latest
             rid: osx-arm64
             executable: DevCleaner
-          - runner: ubuntu-latest
+            package_executable: devcleaner
+            smoke_args: ""
+          - runner: ubuntu-24.04
             rid: linux-x64
             executable: DevCleaner
+            package_executable: devcleaner
+            smoke_args: -RequireLinuxBaseline
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -56,5 +62,19 @@ jobs:
           -p:PublishAot=true
           -o "artifacts/native/${{ matrix.rid }}"
 
-      - name: Smoke-test host executable
-        run: '"artifacts/native/${{ matrix.rid }}/${{ matrix.executable }}" --version'
+      - name: Prepare packaged executable
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE: ${{ matrix.executable }}
+          PACKAGE_EXECUTABLE: ${{ matrix.package_executable }}
+        run: |
+          package="artifacts/package/devcleaner-${RID}"
+          mkdir -p "$package"
+          cp "artifacts/native/${RID}/${EXECUTABLE}" "$package/${PACKAGE_EXECUTABLE}"
+          cp LICENSE README.md "$package/"
+
+      - name: Smoke-test packaged executable
+        run: >-
+          pwsh -NoProfile -File eng/native-smoke.ps1
+          -ExecutablePath "artifacts/package/devcleaner-${{ matrix.rid }}/${{ matrix.package_executable }}"
+          ${{ matrix.smoke_args }}

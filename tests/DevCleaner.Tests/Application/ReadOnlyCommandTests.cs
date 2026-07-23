@@ -134,7 +134,7 @@ public sealed class ReadOnlyCommandTests
         File.WriteAllText(invalidPath, "{\"schemaVersion\":2}");
 
         var path = await RunAsync(["config", "path", "--config", validPath]);
-        var show = await RunAsync(["config", "show", "--format", "json", "--config", validPath]);
+        var show = await RunAsync(["config", "show", "--config", validPath]);
         var validate = await RunAsync(["config", "validate", "--config", validPath]);
         var invalid = await RunAsync(["scan", "--config", invalidPath], gitExecutable: "devcleaner-missing-git");
 
@@ -147,6 +147,27 @@ public sealed class ReadOnlyCommandTests
         Assert.Equal(2, invalid.ExitCode);
         Assert.Contains("schemaVersion", invalid.Stderr);
         Assert.DoesNotContain("Git executable", invalid.Stderr);
+    }
+
+    [Fact]
+    public async Task Explicit_missing_or_directory_config_paths_are_usage_failures_before_git_access()
+    {
+        using var temporary = new TemporaryDirectory();
+        var missingPath = temporary.GetPath("missing.json");
+        var directoryPath = temporary.GetPath("config-directory");
+        Directory.CreateDirectory(directoryPath);
+
+        var missing = await RunAsync(["scan", "--config", missingPath], gitExecutable: "devcleaner-missing-git");
+        var directory = await RunAsync(["scan", "--config", directoryPath], gitExecutable: "devcleaner-missing-git");
+
+        Assert.Equal(2, missing.ExitCode);
+        Assert.Contains("Configuration error", missing.Stderr, StringComparison.Ordinal);
+        Assert.Contains("does not exist", missing.Stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Git executable", missing.Stderr, StringComparison.Ordinal);
+        Assert.Equal(2, directory.ExitCode);
+        Assert.Contains("Configuration error", directory.Stderr, StringComparison.Ordinal);
+        Assert.Contains("directory", directory.Stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Git executable", directory.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]

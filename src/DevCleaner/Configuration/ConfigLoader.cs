@@ -1,3 +1,4 @@
+using System.Security;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DevCleaner.Cli;
@@ -36,8 +37,26 @@ public static class ConfigLoader
 
     public static ConfigLoadResult Load(string? path)
     {
-        var resolvedPath = string.IsNullOrWhiteSpace(path) ? GetDefaultPath() : path;
-        if (!File.Exists(resolvedPath)) return ConfigLoadResult.Success(DevCleanerConfig.Default);
+        var isExplicit = path is not null;
+        string resolvedPath;
+        try
+        {
+            resolvedPath = Path.GetFullPath(isExplicit ? path! : GetDefaultPath());
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return ConfigLoadResult.Failure($"Invalid configuration path: {exception.Message}");
+        }
+
+        return LoadResolvedPath(resolvedPath, isExplicit);
+    }
+
+    internal static ConfigLoadResult LoadResolvedPath(string resolvedPath, bool isExplicit)
+    {
+        if (Directory.Exists(resolvedPath))
+        {
+            return ConfigLoadResult.Failure($"Configuration path '{resolvedPath}' is a directory, not a file.");
+        }
 
         DevCleanerConfig? config;
         try
@@ -49,6 +68,16 @@ public static class ConfigLoader
         catch (JsonException exception)
         {
             return ConfigLoadResult.Failure($"Invalid JSON configuration: {exception.Message}");
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return isExplicit
+                ? ConfigLoadResult.Failure($"Configuration file '{resolvedPath}' does not exist.")
+                : ConfigLoadResult.Success(DevCleanerConfig.Default);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or SecurityException)
+        {
+            return ConfigLoadResult.Failure($"Unable to read configuration: {exception.Message}");
         }
         catch (IOException exception)
         {
@@ -80,10 +109,10 @@ public static class ConfigLoader
         CustomRules = (config.CustomRules ?? []).Select(rule => rule is null
             ? new ArtifactRule(string.Empty, default, [], [], false)
             : rule with
-        {
-            Patterns = rule.Patterns ?? [],
-            Markers = rule.Markers ?? [],
-        }).ToArray(),
+            {
+                Patterns = rule.Patterns ?? [],
+                Markers = rule.Markers ?? [],
+            }).ToArray(),
     };
 
     private static bool Validate(DevCleanerConfig config, out string error)

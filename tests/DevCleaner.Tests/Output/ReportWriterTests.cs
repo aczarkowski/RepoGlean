@@ -62,7 +62,7 @@ public sealed class ReportWriterTests
     public void Dry_run_report_distinguishes_validated_candidates_from_safety_skips()
     {
         var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
-        var candidate = new ArtifactCandidate("/repos/sample", "/repos/sample/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 5, identity);
+        var candidate = new ArtifactCandidate("/repos/sample", "/repos/sample/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 5, identity, identity);
         var validated = ReportDocument.FromCleanup(
             ["/repos"],
             new CleanupResult([new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, "Validated; dry run did not delete the candidate.")], true, false, 1));
@@ -74,6 +74,45 @@ public sealed class ReportWriterTests
         Assert.Empty(validated.Warnings);
         Assert.Equal("partial", rejected.Status);
         Assert.Single(rejected.Warnings);
+    }
+
+    [Fact]
+    public async Task Cleanup_json_exposes_deletion_completion_and_uses_it_for_irreversible_totals()
+    {
+        var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
+        var candidate = new ArtifactCandidate(
+            "/repos/sample",
+            "/repos/sample/obj",
+            "obj",
+            "dotnet.obj",
+            ArtifactCategory.Build,
+            true,
+            1,
+            5,
+            identity,
+            identity);
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            new CleanupResult(
+                [new CleanupCandidateResult(
+                    candidate,
+                    CleanupOutcome.Failed,
+                    "Payload deleted; empty quarantine cleanup failed.",
+                    DeletionCompleted: true)],
+                false,
+                false,
+                1));
+        using var output = new StringWriter();
+
+        await JsonReportWriter.WriteAsync(report, output);
+
+        using var document = JsonDocument.Parse(output.ToString());
+        var root = document.RootElement;
+        var candidateJson = root.GetProperty("repositories")[0].GetProperty("candidates")[0];
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.True(candidateJson.GetProperty("deletionCompleted").GetBoolean());
+        Assert.Equal(1, root.GetProperty("cleanup").GetProperty("deletedCount").GetInt64());
+        Assert.Equal(5, root.GetProperty("cleanup").GetProperty("estimatedDeletedBytes").GetInt64());
     }
 
     [Fact]
@@ -89,6 +128,7 @@ public sealed class ReportWriterTests
             true,
             1,
             5,
+            identity,
             identity);
         var report = ReportDocument.FromCleanup(
             ["/repos"],
@@ -111,13 +151,13 @@ public sealed class ReportWriterTests
         var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
         var small = new RepositoryScanResult(
             "/repos/small",
-            [new ArtifactCandidate("/repos/small", "/repos/small/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 2, identity)],
+            [new ArtifactCandidate("/repos/small", "/repos/small/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 2, identity, identity)],
             1,
             2,
             []);
         var large = new RepositoryScanResult(
             "/repos/large",
-            [new ArtifactCandidate("/repos/large", "/repos/large/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 2, 10, identity)],
+            [new ArtifactCandidate("/repos/large", "/repos/large/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 2, 10, identity, identity)],
             2,
             10,
             []);

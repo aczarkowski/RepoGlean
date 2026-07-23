@@ -5,6 +5,7 @@ public sealed record FileTreeAnalysis(
     long FileCount,
     long EstimatedBytes,
     FileSystemIdentity? Identity,
+    FileSystemIdentity? RepositoryIdentity,
     IReadOnlyList<OperationWarning> Warnings);
 
 public sealed class FileTreeAnalyzer
@@ -31,13 +32,13 @@ public sealed class FileTreeAnalyzer
         if (!RepositoryDiscovery.IsSameOrDescendant(fullPath, fullRepositoryRoot))
         {
             warnings.Add(new OperationWarning(fullPath, "Candidate is outside its repository root."));
-            return new FileTreeAnalysis(false, 0, 0, null, warnings);
+            return new FileTreeAnalysis(false, 0, 0, null, null, warnings);
         }
 
         if (!identityProvider.TryGetIdentity(fullRepositoryRoot, out var repositoryIdentity, out var repositoryIdentityError) || repositoryIdentity is null)
         {
             warnings.Add(new OperationWarning(fullRepositoryRoot, repositoryIdentityError ?? "Repository mount identity is unavailable."));
-            return new FileTreeAnalysis(false, 0, 0, null, warnings);
+            return new FileTreeAnalysis(false, 0, 0, null, null, warnings);
         }
 
         FileAttributes rootAttributes;
@@ -48,37 +49,37 @@ public sealed class FileTreeAnalyzer
         catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
         {
             warnings.Add(new OperationWarning(fullPath, $"Unable to inspect candidate: {exception.Message}"));
-            return new FileTreeAnalysis(false, 0, 0, null, warnings);
+            return new FileTreeAnalysis(false, 0, 0, null, repositoryIdentity, warnings);
         }
 
         if ((rootAttributes & FileAttributes.ReparsePoint) != 0)
         {
             warnings.Add(new OperationWarning(fullPath, "Candidate is a filesystem link or reparse point."));
-            return new FileTreeAnalysis(false, 0, 0, null, warnings);
+            return new FileTreeAnalysis(false, 0, 0, null, repositoryIdentity, warnings);
         }
 
         if (!identityProvider.TryGetIdentity(fullPath, out var identity, out var identityError) || identity is null)
         {
             warnings.Add(new OperationWarning(fullPath, identityError ?? "Stable filesystem identity is unavailable."));
-            return new FileTreeAnalysis(false, 0, 0, null, warnings);
+            return new FileTreeAnalysis(false, 0, 0, null, repositoryIdentity, warnings);
         }
 
         if (!IsSameMount(identity, repositoryIdentity))
         {
             warnings.Add(new OperationWarning(fullPath, "Candidate crosses the repository filesystem mount boundary."));
-            return new FileTreeAnalysis(false, 0, 0, identity, warnings);
+            return new FileTreeAnalysis(false, 0, 0, identity, repositoryIdentity, warnings);
         }
 
         if ((identity.Attributes & FileAttributes.Directory) == 0)
         {
             try
             {
-                return new FileTreeAnalysis(true, 1, new FileInfo(fullPath).Length, identity, warnings);
+                return new FileTreeAnalysis(true, 1, new FileInfo(fullPath).Length, identity, repositoryIdentity, warnings);
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
                 warnings.Add(new OperationWarning(fullPath, $"Unable to read candidate file length: {exception.Message}"));
-                return new FileTreeAnalysis(false, 0, 0, identity, warnings);
+                return new FileTreeAnalysis(false, 0, 0, identity, repositoryIdentity, warnings);
             }
         }
 
@@ -98,7 +99,7 @@ public sealed class FileTreeAnalyzer
                     if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase))
                     {
                         warnings.Add(new OperationWarning(entry, "Candidate contains a nested repository boundary."));
-                        return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                        return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, repositoryIdentity, warnings);
                     }
 
                     var attributes = File.GetAttributes(entry);
@@ -106,20 +107,20 @@ public sealed class FileTreeAnalyzer
                     if ((attributes & FileAttributes.ReparsePoint) != 0)
                     {
                         warnings.Add(new OperationWarning(entry, "Candidate contains a filesystem link or reparse point."));
-                        return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                        return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, repositoryIdentity, warnings);
                     }
                     if ((attributes & FileAttributes.Directory) != 0)
                     {
                         if (!identityProvider.TryGetIdentity(entry, out var directoryIdentity, out var directoryIdentityError) || directoryIdentity is null)
                         {
                             warnings.Add(new OperationWarning(entry, directoryIdentityError ?? "Directory mount identity is unavailable."));
-                            return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                            return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, repositoryIdentity, warnings);
                         }
 
                         if (!IsSameMount(directoryIdentity, repositoryIdentity))
                         {
                             warnings.Add(new OperationWarning(entry, "Candidate contains a directory on a different filesystem mount."));
-                            return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                            return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, repositoryIdentity, warnings);
                         }
 
                         pending.Push(entry);
@@ -133,11 +134,11 @@ public sealed class FileTreeAnalyzer
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
                 warnings.Add(new OperationWarning(directory, $"Unable to analyze candidate: {exception.Message}"));
-                return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, warnings);
+                return new FileTreeAnalysis(false, fileCount, estimatedBytes, identity, repositoryIdentity, warnings);
             }
         }
 
-        return new FileTreeAnalysis(true, fileCount, estimatedBytes, identity, warnings);
+        return new FileTreeAnalysis(true, fileCount, estimatedBytes, identity, repositoryIdentity, warnings);
     }
 
     private static bool IsSameMount(FileSystemIdentity left, FileSystemIdentity right) =>

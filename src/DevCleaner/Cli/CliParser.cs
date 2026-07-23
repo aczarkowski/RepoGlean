@@ -24,12 +24,14 @@ public static class CliParser
         var quiet = false;
         var verbose = false;
         var noProgress = false;
+        var usedOptions = new List<string>();
 
         for (var index = 0; index < arguments.Length; index++)
         {
             var argument = arguments[index];
             if (argument.StartsWith("--", StringComparison.Ordinal))
             {
+                usedOptions.Add(argument);
                 switch (argument)
                 {
                     case "--repo":
@@ -119,6 +121,12 @@ public static class CliParser
         if (command is null || awaitingSubcommand)
         {
             return ParseResult<CliOptions>.Failure("A command and required subcommand are required.");
+        }
+
+        var invalidOption = usedOptions.FirstOrDefault(option => !IsOptionAllowed(command.Value, option));
+        if (invalidOption is not null)
+        {
+            return ParseResult<CliOptions>.Failure($"Option '{invalidOption}' is not valid with {CommandName(command.Value)}.");
         }
 
         if (yes && command != CommandKind.Clean)
@@ -232,4 +240,29 @@ public static class CliParser
             default: format = default; return false;
         }
     }
+
+    private static bool IsOptionAllowed(CommandKind command, string option) => command switch
+    {
+        CommandKind.Scan => option is
+            "--repo" or "--category" or "--exclude" or "--min-size" or "--format" or "--config" or
+            "--all-drives" or "--details" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
+        CommandKind.Clean => option is
+            "--repo" or "--category" or "--exclude" or "--min-size" or "--format" or "--config" or
+            "--all-drives" or "--dry-run" or "--yes" or "--all" or "--no-color" or "--quiet" or
+            "--verbose" or "--no-progress",
+        CommandKind.RulesList => option is "--format" or "--config",
+        CommandKind.ConfigPath or CommandKind.ConfigShow or CommandKind.ConfigValidate => option is "--config",
+        CommandKind.Help => option is "--help",
+        CommandKind.Version => option is "--version",
+        _ => false,
+    };
+
+    private static string CommandName(CommandKind command) => command switch
+    {
+        CommandKind.RulesList => "rules list",
+        CommandKind.ConfigPath => "config path",
+        CommandKind.ConfigShow => "config show",
+        CommandKind.ConfigValidate => "config validate",
+        _ => command.ToString().ToLowerInvariant(),
+    };
 }

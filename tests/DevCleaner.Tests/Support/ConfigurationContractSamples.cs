@@ -86,6 +86,42 @@ public static class ConfigurationContractSamples
             false
         },
         {
+            "candidate pattern with a leading forward slash",
+            """
+            {"schemaVersion":1,"customRules":[{
+              "id":"company.forward-rooted","category":"Build","patterns":["/generated/**"]
+            }]}
+            """,
+            false
+        },
+        {
+            "candidate pattern with a leading backslash",
+            """
+            {"schemaVersion":1,"customRules":[{
+              "id":"company.back-rooted","category":"Build","patterns":["\\generated\\**"]
+            }]}
+            """,
+            false
+        },
+        {
+            "candidate pattern with a drive root",
+            """
+            {"schemaVersion":1,"customRules":[{
+              "id":"company.drive-rooted","category":"Build","patterns":["C:\\generated\\**"]
+            }]}
+            """,
+            false
+        },
+        {
+            "candidate pattern with a UNC root",
+            """
+            {"schemaVersion":1,"customRules":[{
+              "id":"company.unc-rooted","category":"Build","patterns":["\\\\server\\share\\**"]
+            }]}
+            """,
+            false
+        },
+        {
             "empty marker",
             """
             {"schemaVersion":1,"customRules":[{

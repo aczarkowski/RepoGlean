@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -5,11 +6,21 @@ namespace DevCleaner.Rules;
 
 public static class GlobMatcher
 {
+    private static readonly ConcurrentDictionary<string, Regex> RegexCache = new(StringComparer.Ordinal);
+
     public static bool IsMatch(string pattern, string repositoryRelativePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(pattern);
         ArgumentNullException.ThrowIfNull(repositoryRelativePath);
-        return Regex.IsMatch(Normalize(repositoryRelativePath), ToRegex(Normalize(pattern)), RegexOptions.CultureInvariant);
+        return GetOrCreateRegex(pattern).IsMatch(Normalize(repositoryRelativePath));
+    }
+
+    internal static Regex GetOrCreateRegex(string pattern)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pattern);
+        return RegexCache.GetOrAdd(
+            Normalize(pattern),
+            static normalizedPattern => new Regex(ToRegex(normalizedPattern), RegexOptions.CultureInvariant));
     }
 
     private static string Normalize(string value) => value.Replace('\\', '/');

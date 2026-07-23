@@ -19,26 +19,32 @@ jobs:
             rid: win-x64
             executable: DevCleaner.exe
             package_executable: devcleaner.exe
+            smoke_args: ""
           - runner: windows-11-arm
             rid: win-arm64
             executable: DevCleaner.exe
             package_executable: devcleaner.exe
+            smoke_args: ""
           - runner: macos-15-intel
             rid: osx-x64
             executable: DevCleaner
             package_executable: devcleaner
+            smoke_args: ""
           - runner: macos-15
             rid: osx-arm64
             executable: DevCleaner
             package_executable: devcleaner
+            smoke_args: ""
           - runner: ubuntu-24.04
             rid: linux-x64
             executable: DevCleaner
             package_executable: devcleaner
+            smoke_args: -RequireLinuxBaseline
           - runner: ubuntu-24.04-arm
             rid: linux-arm64
             executable: DevCleaner
             package_executable: devcleaner
+            smoke_args: -RequireLinuxBaseline
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -64,10 +70,7 @@ jobs:
           -p:Version="${GITHUB_REF_NAME#v}"
           -o "artifacts/native/${{ matrix.rid }}"
 
-      - name: Smoke-test release executable
-        run: '"artifacts/native/${{ matrix.rid }}/${{ matrix.executable }}" --version'
-
-      - name: Package executable, license, and README
+      - name: Prepare release package
         env:
           RID: ${{ matrix.rid }}
           EXECUTABLE: ${{ matrix.executable }}
@@ -77,6 +80,17 @@ jobs:
           mkdir -p "$package"
           cp "artifacts/native/${RID}/${EXECUTABLE}" "$package/${PACKAGE_EXECUTABLE}"
           cp LICENSE README.md "$package/"
+
+      - name: Smoke-test packaged executable
+        run: >-
+          pwsh -NoProfile -File eng/native-smoke.ps1
+          -ExecutablePath "artifacts/package/devcleaner-${{ matrix.rid }}/${{ matrix.package_executable }}"
+          ${{ matrix.smoke_args }}
+
+      - name: Archive release package and checksum
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
           archive_name="devcleaner-${RID}.tar.gz"
           archive="artifacts/${archive_name}"
           tar -czf "$archive" -C artifacts/package "devcleaner-${RID}"

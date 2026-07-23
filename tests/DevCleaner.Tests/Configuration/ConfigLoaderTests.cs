@@ -41,9 +41,9 @@ public sealed class ConfigLoaderTests : IDisposable
     }
 
     [Fact]
-    public void Load_missing_file_returns_version_one_empty_defaults()
+    public void Load_absent_implicit_file_returns_version_one_empty_defaults()
     {
-        var result = ConfigLoader.Load(Path.Combine(directory, "missing.json"));
+        var result = ConfigLoader.LoadResolvedPath(Path.Combine(directory, "missing.json"), isExplicit: false);
 
         Assert.True(result.IsSuccess, result.Error);
         var config = Assert.IsType<DevCleanerConfig>(result.Config);
@@ -52,6 +52,60 @@ public sealed class ConfigLoaderTests : IDisposable
         Assert.Empty(config.Excludes);
         Assert.Empty(config.DisabledRules);
         Assert.Empty(config.CustomRules);
+    }
+
+    [Fact]
+    public void Load_rejects_an_explicit_missing_file()
+    {
+        var path = Path.Combine(directory, "missing.json");
+
+        var result = ConfigLoader.Load(path);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("does not exist", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Load_rejects_an_explicit_directory()
+    {
+        Directory.CreateDirectory(directory);
+
+        var result = ConfigLoader.Load(directory);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("directory", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Load_reports_an_explicit_access_failure_where_unix_permissions_are_enforced()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var path = Write("{\"schemaVersion\":1}");
+        var originalMode = File.GetUnixFileMode(path);
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.None);
+
+            try
+            {
+                using var probe = File.OpenRead(path);
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // The access-failure assertion applies only where Unix mode bits are enforced.
+            }
+
+            var result = ConfigLoader.Load(path);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains("read", result.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, originalMode);
+        }
     }
 
     [Fact]

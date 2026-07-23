@@ -34,6 +34,32 @@ public sealed class CleanCommandTests
         Assert.False(Directory.Exists(repository.GetPath("node_modules")));
     }
 
+    [Fact]
+    public async Task Interactive_all_flag_makes_enter_include_dependencies()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(["clean", repository.Path, "--all"], "\n\ndelete\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.False(Directory.Exists(repository.GetPath("obj")));
+        Assert.False(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Interactive_dependency_category_makes_enter_select_matching_dependencies()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(["clean", repository.Path, "--category", "dependency"], "\n\ndelete\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(Directory.Exists(repository.GetPath("obj")));
+        Assert.False(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
     [Theory]
     [InlineData("DELETE")]
     [InlineData("no")]
@@ -115,6 +141,29 @@ public sealed class CleanCommandTests
         Assert.All(
             root.GetProperty("repositories").EnumerateArray().SelectMany(repositoryElement => repositoryElement.GetProperty("candidates").EnumerateArray()),
             candidate => Assert.Equal("deleted", candidate.GetProperty("outcome").GetString()));
+    }
+
+    [Fact]
+    public async Task Human_partial_cleanup_uses_scan_style_quiet_and_verbose_diagnostics()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+        var missingRoot = temporary.GetPath("missing-root");
+
+        var standard = await RunAsync(["clean", repository.Path, missingRoot, "--dry-run"], string.Empty);
+        var verbose = await RunAsync(["clean", repository.Path, missingRoot, "--dry-run", "--verbose"], string.Empty);
+        var quiet = await RunAsync(["clean", repository.Path, missingRoot, "--dry-run", "--quiet"], string.Empty);
+
+        Assert.Equal(3, standard.ExitCode);
+        Assert.Contains("Warnings: 1", standard.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain(missingRoot, standard.Stdout, StringComparison.Ordinal);
+        Assert.Equal(3, verbose.ExitCode);
+        Assert.Contains("Warnings: 1", verbose.Stdout, StringComparison.Ordinal);
+        Assert.Contains(missingRoot, verbose.Stdout, StringComparison.Ordinal);
+        Assert.Equal(3, quiet.ExitCode);
+        Assert.Contains("Dry run:", quiet.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Warnings:", quiet.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain(missingRoot, quiet.Stdout, StringComparison.Ordinal);
     }
 
     private static async Task<GitTestRepository> CreateRepositoryAsync(string path)

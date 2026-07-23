@@ -28,7 +28,8 @@ public sealed record CandidateReport(
     long FileCount,
     long EstimatedBytes,
     string? Outcome = null,
-    string? Message = null);
+    string? Message = null,
+    bool? DeletionCompleted = null);
 
 public sealed record RepositoryReport(
     string Root,
@@ -137,7 +138,8 @@ public sealed record ReportDocument(
                         item.Candidate.FileCount,
                         item.Candidate.EstimatedBytes,
                         item.Outcome.ToString().ToLowerInvariant(),
-                        item.Message))
+                        item.Message,
+                        item.DeletionCompleted))
                     .ToArray()),
                 group.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.FileCount)),
                 group.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.EstimatedBytes))))

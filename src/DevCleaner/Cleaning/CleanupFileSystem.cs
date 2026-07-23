@@ -6,9 +6,11 @@ internal interface ICleanupFileSystem
 {
     FileAttributes GetAttributes(string path);
 
+    IReadOnlyList<string> GetFileSystemEntries(string path);
+
     void CreateDirectory(string path);
 
-    void DeleteOwnedObject(string path, bool isDirectory, CancellationToken cancellationToken);
+    void DeleteFile(string path);
 
     void DeleteDirectory(string path);
 }
@@ -17,17 +19,11 @@ internal sealed class SystemCleanupFileSystem : ICleanupFileSystem
 {
     public FileAttributes GetAttributes(string path) => File.GetAttributes(path);
 
+    public IReadOnlyList<string> GetFileSystemEntries(string path) => Directory.GetFileSystemEntries(path);
+
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
-    public void DeleteOwnedObject(string path, bool isDirectory, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        // .NET treats symbolic links and Windows name-surrogate reparse points as leaf entries here.
-        // The approved v1 threat model covers accidental concurrency before this primitive, not a
-        // malicious same-user process racing the runtime's internal enumeration of this GUID-private path.
-        if (isDirectory) Directory.Delete(path, recursive: true);
-        else File.Delete(path);
-    }
+    public void DeleteFile(string path) => File.Delete(path);
 
     public void DeleteDirectory(string path) => Directory.Delete(path, recursive: false);
 }
@@ -39,6 +35,12 @@ internal interface ICleanupMutationObserver
     void BeforeMovedIdentityCheck(ArtifactCandidate candidate, string quarantineRoot, string destinationPath);
 
     void BeforeRecursiveDelete(ArtifactCandidate candidate, string quarantineRoot, string destinationPath);
+
+    void BeforeRecoveryMove(
+        ArtifactCandidate candidate,
+        string quarantineRoot,
+        string destinationPath,
+        string candidatePath);
 }
 
 internal sealed class NullCleanupMutationObserver : ICleanupMutationObserver
@@ -52,6 +54,14 @@ internal sealed class NullCleanupMutationObserver : ICleanupMutationObserver
     }
 
     public void BeforeRecursiveDelete(ArtifactCandidate candidate, string quarantineRoot, string destinationPath)
+    {
+    }
+
+    public void BeforeRecoveryMove(
+        ArtifactCandidate candidate,
+        string quarantineRoot,
+        string destinationPath,
+        string candidatePath)
     {
     }
 }

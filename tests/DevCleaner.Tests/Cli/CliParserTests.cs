@@ -7,7 +7,7 @@ public sealed class CliParserTests
     [Fact]
     public void Parse_scan_accepts_roots_and_options()
     {
-        var result = CliParser.Parse(["scan", "one", "two", "--repo", "api", "--category", "build", "--exclude", "generated", "--min-size", "1.5MiB", "--all-drives", "--details", "--dry-run"]);
+        var result = CliParser.Parse(["scan", "one", "two", "--repo", "api", "--category", "build", "--exclude", "generated", "--min-size", "1.5MiB", "--all-drives", "--details"]);
 
         Assert.True(result.IsSuccess, result.Error);
         var options = Assert.IsType<CliOptions>(result.Value);
@@ -19,7 +19,7 @@ public sealed class CliParserTests
         Assert.Equal(1_572_864, options.MinimumBytes);
         Assert.True(options.AllDrives);
         Assert.True(options.Details);
-        Assert.True(options.DryRun);
+        Assert.False(options.DryRun);
     }
 
     [Fact]
@@ -186,5 +186,24 @@ public sealed class CliParserTests
         var result = CliParser.Parse(arguments);
 
         Assert.True(result.IsSuccess, result.Error);
+    }
+
+    [Theory]
+    [InlineData("scan", "--dry-run")]
+    [InlineData("scan", "--all")]
+    [InlineData("clean", "--details")]
+    [InlineData("rules", "list", "--all-drives")]
+    [InlineData("rules", "list", "--quiet")]
+    [InlineData("config", "path", "--format", "json")]
+    [InlineData("config", "show", "--quiet")]
+    [InlineData("config", "validate", "--format", "json")]
+    [InlineData("help", "--config", "config.json")]
+    [InlineData("version", "--verbose")]
+    public void Parse_rejects_options_outside_the_command_specific_matrix(params string[] arguments)
+    {
+        var result = CliParser.Parse(arguments);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("not valid with", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 }

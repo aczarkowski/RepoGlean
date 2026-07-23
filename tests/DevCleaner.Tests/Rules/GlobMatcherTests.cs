@@ -1,9 +1,20 @@
+using System.Text.RegularExpressions;
 using DevCleaner.Rules;
 
 namespace DevCleaner.Tests.Rules;
 
 public sealed class GlobMatcherTests
 {
+    [Fact]
+    public void GetOrCreateRegex_caches_normalized_dynamic_patterns()
+    {
+        var first = GlobMatcher.GetOrCreateRegex("**\\obj\\**");
+        var equivalent = GlobMatcher.GetOrCreateRegex("**/obj/**");
+
+        Assert.Same(first, equivalent);
+        Assert.False(first.Options.HasFlag(RegexOptions.Compiled));
+    }
+
     [Theory]
     [InlineData("bin/*", "bin/debug", true)]
     [InlineData("bin/*", "src/bin/debug", false)]

@@ -90,8 +90,7 @@ public static class DevCleanerApp
                     return 0;
             }
 
-            var configPath = ResolveConfigPath(options.ConfigPath);
-            var loadResult = ConfigLoader.Load(configPath);
+            var loadResult = ConfigLoader.Load(options.ConfigPath);
             if (!loadResult.IsSuccess)
             {
                 await stderr.WriteLineAsync($"Configuration error: {loadResult.Error}").ConfigureAwait(false);
@@ -99,6 +98,7 @@ public static class DevCleanerApp
             }
 
             var config = loadResult.Config!;
+            var configPath = ResolveConfigPath(options.ConfigPath);
             switch (options.Command)
             {
                 case CommandKind.ConfigShow:
@@ -202,7 +202,8 @@ public static class DevCleanerApp
             var selectedRepositories = repositorySelection.Select(index => availableRepositories[index]).ToArray();
             var availableCandidates = selectedRepositories.SelectMany(repository => repository.Candidates).ToArray();
             HumanReportWriter.WriteCandidateSelection(availableCandidates, stdout);
-            var candidateDefaults = FilterCandidates(selectedRepositories, includeOptIn: false)
+            var includeOptIn = options.All || options.Categories.Count > 0;
+            var candidateDefaults = FilterCandidates(selectedRepositories, includeOptIn)
                 .Select(candidate => Array.IndexOf(availableCandidates, candidate))
                 .ToArray();
             var candidateSelection = await ReadSelectionAsync(
@@ -241,7 +242,14 @@ public static class DevCleanerApp
         }
         else
         {
-            HumanReportWriter.WriteCleanup(report, stdout, options.Quiet);
+            HumanReportWriter.WriteCleanup(
+                report,
+                stdout,
+                new HumanReportOptions(
+                    Details: false,
+                    Quiet: options.Quiet,
+                    Verbose: options.Verbose,
+                    UseColor: runtime.IsOutputInteractive && !options.NoColor));
         }
 
         if (showProgress) await stderr.WriteLineAsync("Cleanup complete.").ConfigureAwait(false);

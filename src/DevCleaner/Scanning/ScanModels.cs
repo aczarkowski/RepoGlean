@@ -20,7 +20,8 @@ public sealed record ArtifactCandidate(
     bool Preselected,
     long FileCount,
     long EstimatedBytes,
-    FileSystemIdentity Identity);
+    FileSystemIdentity Identity,
+    FileSystemIdentity RepositoryIdentity);
 
 public sealed record RepositoryScanResult(
     string RepositoryRoot,

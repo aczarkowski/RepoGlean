@@ -13,7 +13,8 @@ public enum CleanupOutcome
 public sealed record CleanupCandidateResult(
     ArtifactCandidate Candidate,
     CleanupOutcome Outcome,
-    string Message);
+    string Message,
+    bool DeletionCompleted = false);
 
 public sealed record CleanupRequest(
     IReadOnlyList<ArtifactCandidate> Candidates,
@@ -27,13 +28,13 @@ public sealed record CleanupResult(
     bool IsInterrupted,
     long SelectedCount)
 {
-    public long DeletedCount => Items.LongCount(item => item.Outcome == CleanupOutcome.Deleted);
+    public long DeletedCount => Items.LongCount(item => item.DeletionCompleted);
 
     public long SkippedCount => Items.LongCount(item => item.Outcome == CleanupOutcome.Skipped);
 
     public long FailedCount => Items.LongCount(item => item.Outcome == CleanupOutcome.Failed);
 
     public long EstimatedDeletedBytes => Items
-        .Where(item => item.Outcome == CleanupOutcome.Deleted)
+        .Where(item => item.DeletionCompleted)
         .Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.EstimatedBytes));
 }

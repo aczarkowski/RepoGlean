@@ -212,6 +212,7 @@ public sealed class EndToEndTests
         var schemaPath = Path.Combine(repositoryRoot, "docs", "configuration.schema.json");
         var ciPath = Path.Combine(repositoryRoot, ".github", "workflows", "ci.yml");
         var releasePath = Path.Combine(repositoryRoot, ".github", "workflows", "release.yml");
+        var smokePath = Path.Combine(repositoryRoot, "eng", "native-smoke.ps1");
 
         Assert.Equal(0, executableHelp.ExitCode);
         Assert.Contains("--config", executableHelp.Stdout, StringComparison.Ordinal);
@@ -220,12 +221,31 @@ public sealed class EndToEndTests
         Assert.True(File.Exists(schemaPath), "The v1 configuration JSON Schema must be published.");
         Assert.True(File.Exists(ciPath), "The cross-platform CI workflow must be published.");
         Assert.True(File.Exists(releasePath), "The Native AOT release workflow must be published.");
+        Assert.True(File.Exists(smokePath), "The reusable packaged-executable smoke script must be published.");
 
         var schema = JsonNode.Parse(await File.ReadAllTextAsync(schemaPath))!.AsObject();
         Assert.Equal("https://json-schema.org/draft/2020-12/schema", schema["$schema"]!.GetValue<string>());
         Assert.Equal(1, schema["$defs"]!["schemaVersion"]!["const"]!.GetValue<int>());
 
+        var readme = await File.ReadAllTextAsync(readmePath);
+        Assert.Contains("glibc", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("STATX_MNT_ID", readme, StringComparison.Ordinal);
+        Assert.Contains("Ubuntu 24.04", readme, StringComparison.Ordinal);
+        Assert.Contains("ext4", readme, StringComparison.OrdinalIgnoreCase);
+
+        var smoke = await File.ReadAllTextAsync(smokePath);
+        Assert.Contains("ConvertFrom-Json", smoke, StringComparison.Ordinal);
+        Assert.Contains("clean", smoke, StringComparison.OrdinalIgnoreCase);
+
+        var ci = await File.ReadAllTextAsync(ciPath);
         var release = await File.ReadAllTextAsync(releasePath);
+        Assert.Contains("eng/native-smoke.ps1", ci, StringComparison.Ordinal);
+        Assert.Contains("artifacts/package", ci, StringComparison.Ordinal);
+        Assert.Contains("eng/native-smoke.ps1", release, StringComparison.Ordinal);
+        Assert.True(
+            release.IndexOf("Prepare release package", StringComparison.Ordinal) <
+            release.IndexOf("Smoke-test packaged executable", StringComparison.Ordinal),
+            "Release smoke must run after the final executable name is prepared.");
         foreach (var rid in new[] { "win-x64", "win-arm64", "osx-x64", "osx-arm64", "linux-x64", "linux-arm64" })
         {
             Assert.Contains(rid, release, StringComparison.Ordinal);

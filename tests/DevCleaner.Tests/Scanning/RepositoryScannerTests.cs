@@ -283,16 +283,95 @@ public sealed class RepositoryScannerTests
         repository.Write("src/obj/succeeds.bin", "unrelated");
         await repository.CommitAllAsync();
         var wrapper = temporary.GetPath("git-wrapper");
-        File.WriteAllText(wrapper, "#!/bin/sh\nif [ \"$3\" = \"check-ignore\" ] && [ \"$6\" = \"obj\" ]; then echo injected-check-ignore-failure >&2; exit 2; fi\nexec git \"$@\"\n");
+        File.WriteAllText(wrapper, "#!/bin/sh\nif [ \"$3\" = \"check-ignore\" ]; then cat > \"$DEVCLEANER_CHECK_IGNORE_INPUT\"; if tr '\\0' '\\n' < \"$DEVCLEANER_CHECK_IGNORE_INPUT\" | grep -Fxq 'obj'; then echo injected-check-ignore-failure >&2; exit 2; fi; exec git \"$@\" < \"$DEVCLEANER_CHECK_IGNORE_INPUT\"; fi\nexec git \"$@\"\n");
         File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-        var result = await ScanAsync(new GitClient(wrapper), repository);
+        var result = await ScanAsync(new GitClient(wrapper, new Dictionary<string, string?>
+        {
+            ["DEVCLEANER_CHECK_IGNORE_INPUT"] = temporary.GetPath("check-ignore-input"),
+        }), repository);
 
         var candidate = Assert.Single(result.Repositories.Single().Candidates);
         Assert.Equal("src/obj", candidate.RelativePath);
         Assert.Contains(result.Warnings, warning =>
             warning.Path == repository.GetPath("obj") &&
             warning.Message.Contains("injected-check-ignore-failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScanAsync_prunes_prior_repository_local_quarantines_and_never_rediscovers_their_payloads()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "node_modules/\n");
+        repository.Write("package.json", "{}");
+        await repository.CommitAllAsync();
+        const string quarantineName = ".DevCleaner-Quarantine-0123456789abcdef";
+        var quarantinePath = repository.GetPath(quarantineName);
+        repository.Write($"{quarantineName}/payload/package.json", "{}");
+        repository.Write($"{quarantineName}/payload/node_modules/package.bin", "stranded");
+
+        var result = await ScanAsync(new GitClient(), repository);
+
+        var scannedRepository = Assert.Single(result.Repositories);
+        Assert.Empty(scannedRepository.Candidates);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == quarantinePath &&
+            warning.Message.Contains("quarantine", StringComparison.OrdinalIgnoreCase));
+        Assert.True(File.Exists(Path.Combine(quarantinePath, "payload", "node_modules", "package.bin")));
+    }
+
+    [Fact]
+    public async Task ScanAsync_batches_git_ignore_checks_at_scale()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "artifact-*/\n");
+        const int candidateCount = 129;
+        for (var index = 0; index < candidateCount; index++)
+        {
+            repository.Write($"artifact-{index:D3}/payload.bin", "ignored");
+        }
+
+        await repository.CommitAllAsync();
+        var invocationLog = temporary.GetPath("check-ignore-invocations");
+        var wrapper = temporary.GetPath("git-wrapper");
+        File.WriteAllText(wrapper, "#!/bin/sh\nif [ \"$3\" = \"check-ignore\" ]; then printf 'check-ignore\\n' >> \"$DEVCLEANER_CHECK_IGNORE_LOG\"; fi\nexec git \"$@\"\n");
+        File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var git = new GitClient(wrapper, new Dictionary<string, string?>
+        {
+            ["DEVCLEANER_CHECK_IGNORE_LOG"] = invocationLog,
+        });
+        var rule = new ArtifactRule("test.scaled", ArtifactCategory.Build, ["artifact-*"], [], true);
+
+        var result = await new RepositoryScanner(git).ScanAsync([repository.Path], new RuleCatalog([rule]));
+
+        Assert.Equal(candidateCount, result.Repositories.Single().Candidates.Count);
+        Assert.Equal(2, File.ReadAllLines(invocationLog).Length);
+    }
+
+    [Fact]
+    public async Task GitClient_batches_nul_delimited_ignore_paths_without_losing_spaces_or_newlines()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "cache*/\n");
+        repository.Write("visible/file.bin", "visible");
+        await repository.CommitAllAsync();
+        repository.Write("cache space/payload.bin", "ignored with a space");
+        var paths = new List<string> { "cache space", "visible" };
+        var expected = new HashSet<string>(["cache space"], StringComparer.Ordinal);
+        if (!OperatingSystem.IsWindows())
+        {
+            repository.Write("cache\nline/payload.bin", "ignored with a newline");
+            paths.Add("cache\nline");
+            expected.Add("cache\nline");
+        }
+
+        var ignoredPaths = await new GitClient().GetIgnoredPathsAsync(repository.Path, paths);
+
+        Assert.Equal(expected, ignoredPaths);
     }
 
     [Fact]

@@ -22,7 +22,8 @@ internal sealed class ProcessRunner
     public async Task<ProcessResult> RunAsync(
         IReadOnlyList<string> arguments,
         string? workingDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? standardInput = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var startInfo = new ProcessStartInfo
@@ -31,6 +32,7 @@ internal sealed class ProcessRunner
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = standardInput is not null,
             CreateNoWindow = true,
         };
         if (!string.IsNullOrWhiteSpace(workingDirectory)) startInfo.WorkingDirectory = workingDirectory;
@@ -53,6 +55,13 @@ internal sealed class ProcessRunner
             var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
             try
             {
+                if (standardInput is not null)
+                {
+                    await process.StandardInput.WriteAsync(standardInput.AsMemory(), cancellationToken).ConfigureAwait(false);
+                    await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    process.StandardInput.Close();
+                }
+
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
                 return new ProcessResult(
                     process.ExitCode,

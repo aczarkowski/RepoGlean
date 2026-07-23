@@ -86,11 +86,15 @@ public static class HumanReportWriter
         }
     }
 
-    public static void WriteCleanup(ReportDocument report, TextWriter output, bool quiet = false)
+    public static void WriteCleanup(ReportDocument report, TextWriter output, bool quiet = false) =>
+        WriteCleanup(report, output, new HumanReportOptions(false, quiet, false, false));
+
+    public static void WriteCleanup(ReportDocument report, TextWriter output, HumanReportOptions options)
     {
         ArgumentNullException.ThrowIfNull(report);
         ArgumentNullException.ThrowIfNull(output);
-        if (!quiet)
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.Quiet)
         {
             foreach (var repository in report.Repositories)
             {
@@ -99,6 +103,9 @@ public static class HumanReportWriter
                     output.WriteLine($"{candidate.Outcome}: {candidate.AbsolutePath} ({FormatBytes(candidate.EstimatedBytes)}) - {candidate.Message}");
                 }
             }
+
+            WriteMessages(output, "Warnings", report.Warnings, options.Verbose);
+            WriteMessages(output, "Errors", report.Errors, options.Verbose);
         }
 
         var cleanup = report.Cleanup ?? new CleanupSummaryReport(0, 0, 0, 0, 0, false, false);
@@ -106,6 +113,18 @@ public static class HumanReportWriter
         output.WriteLine(
             $"{prefix}: {cleanup.DeletedCount} deleted, {cleanup.SkippedCount} skipped, {cleanup.FailedCount} failed | " +
             $"{cleanup.SelectedCount} selected, {report.Totals.CandidateCount} processed | {FormatBytes(cleanup.EstimatedDeletedBytes)} deleted");
+    }
+
+    private static void WriteMessages(
+        TextWriter output,
+        string label,
+        IReadOnlyList<ReportMessage> messages,
+        bool includeDetails)
+    {
+        if (messages.Count == 0) return;
+        output.WriteLine($"{label}: {messages.Count}");
+        if (!includeDetails) return;
+        foreach (var message in messages) output.WriteLine($"  {message.Path}: {message.Message}");
     }
 
     public static string FormatBytes(long bytes)

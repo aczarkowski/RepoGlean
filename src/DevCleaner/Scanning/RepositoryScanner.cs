@@ -112,12 +112,27 @@ public sealed class RepositoryScanner
         CancellationToken cancellationToken)
     {
         var candidates = new List<ArtifactCandidate>();
-        var pending = new Stack<string>();
-        pending.Push(repositoryRoot);
-        while (pending.Count > 0)
+        var pendingDirectories = new Stack<string>();
+        var pendingMatches = new List<PendingMatch>(GitClient.MaximumCheckIgnoreBatchSize);
+        pendingDirectories.Push(repositoryRoot);
+        while (pendingDirectories.Count > 0 || pendingMatches.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var directory = pending.Pop();
+            if (pendingDirectories.Count == 0)
+            {
+                await ResolvePendingMatchesAsync(
+                    repositoryRoot,
+                    pendingMatches,
+                    pendingDirectories,
+                    visiblePaths,
+                    options,
+                    candidates,
+                    warnings,
+                    cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            var directory = pendingDirectories.Pop();
             IReadOnlyList<string> entries;
             try
             {
@@ -134,7 +149,8 @@ public sealed class RepositoryScanner
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase)) continue;
                 var relativePath = NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, entry));
-                if (IsExcluded(entry, relativePath, options.Exclusions)) continue;
+                var reservedQuarantine = IsReservedRootQuarantine(relativePath);
+                if (!reservedQuarantine && IsExcluded(entry, relativePath, options.Exclusions)) continue;
 
                 FileAttributes attributes;
                 try
@@ -148,6 +164,16 @@ public sealed class RepositoryScanner
                 }
 
                 var isDirectory = (attributes & FileAttributes.Directory) != 0;
+                if (reservedQuarantine &&
+                    (isDirectory || (attributes & FileAttributes.ReparsePoint) != 0))
+                {
+                    warnings.Add(new OperationWarning(
+                        entry,
+                        "Skipped reserved DevCleaner quarantine; inspect or remove the stranded payload manually."));
+                    continue;
+                }
+
+                if (reservedQuarantine && IsExcluded(entry, relativePath, options.Exclusions)) continue;
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     if (activeRules.Any(rule => rule.Matches(relativePath)))
@@ -164,52 +190,136 @@ public sealed class RepositoryScanner
                 }
 
                 var matchingRule = activeRules.FirstOrDefault(rule => rule.Matches(relativePath));
-                bool isIgnored = false;
                 if (matchingRule is not null)
                 {
-                    try
+                    pendingMatches.Add(new PendingMatch(entry, relativePath, isDirectory, matchingRule));
+                    if (pendingMatches.Count >= GitClient.MaximumCheckIgnoreBatchSize)
                     {
-                        isIgnored = await git.IsIgnoredAsync(repositoryRoot, relativePath, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (GitCommandException exception)
-                    {
-                        warnings.Add(new OperationWarning(entry, exception.Message));
-                        continue;
-                    }
-                }
-
-                if (matchingRule is not null && isIgnored)
-                {
-                    if (ContainsVisibleContent(relativePath, visiblePaths))
-                    {
-                        warnings.Add(new OperationWarning(entry, "Ignored candidate contains tracked or otherwise visible content."));
-                        continue;
-                    }
-
-                    var analysis = analyzer.Analyze(entry, repositoryRoot, cancellationToken);
-                    warnings.AddRange(analysis.Warnings);
-                    if (analysis.IsSafe && analysis.Identity is not null && (options.MinimumBytes is null || analysis.EstimatedBytes >= options.MinimumBytes.Value))
-                    {
-                        candidates.Add(new ArtifactCandidate(
+                        await ResolvePendingMatchesAsync(
                             repositoryRoot,
-                            Path.GetFullPath(entry),
-                            relativePath,
-                            matchingRule.Id,
-                            matchingRule.Category,
-                            matchingRule.Preselected,
-                            analysis.FileCount,
-                            analysis.EstimatedBytes,
-                            analysis.Identity));
+                            pendingMatches,
+                            pendingDirectories,
+                            visiblePaths,
+                            options,
+                            candidates,
+                            warnings,
+                            cancellationToken).ConfigureAwait(false);
                     }
 
                     continue;
                 }
 
-                if (isDirectory) pending.Push(entry);
+                if (isDirectory) pendingDirectories.Push(entry);
             }
         }
 
         return candidates;
+    }
+
+    private async Task ResolvePendingMatchesAsync(
+        string repositoryRoot,
+        List<PendingMatch> pendingMatches,
+        Stack<string> pendingDirectories,
+        IReadOnlyList<string> visiblePaths,
+        ScanOptions options,
+        List<ArtifactCandidate> candidates,
+        List<OperationWarning> warnings,
+        CancellationToken cancellationToken)
+    {
+        var batch = pendingMatches.ToArray();
+        pendingMatches.Clear();
+        await ResolveIgnoreBatchAsync(
+            repositoryRoot,
+            batch,
+            pendingDirectories,
+            visiblePaths,
+            options,
+            candidates,
+            warnings,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ResolveIgnoreBatchAsync(
+        string repositoryRoot,
+        IReadOnlyList<PendingMatch> batch,
+        Stack<string> pendingDirectories,
+        IReadOnlyList<string> visiblePaths,
+        ScanOptions options,
+        List<ArtifactCandidate> candidates,
+        List<OperationWarning> warnings,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlySet<string> ignoredPaths;
+        try
+        {
+            ignoredPaths = await git.GetIgnoredPathsAsync(
+                repositoryRoot,
+                batch.Select(static match => match.RelativePath).ToArray(),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (GitCommandException) when (batch.Count > 1)
+        {
+            var midpoint = batch.Count / 2;
+            await ResolveIgnoreBatchAsync(
+                repositoryRoot,
+                batch.Take(midpoint).ToArray(),
+                pendingDirectories,
+                visiblePaths,
+                options,
+                candidates,
+                warnings,
+                cancellationToken).ConfigureAwait(false);
+            await ResolveIgnoreBatchAsync(
+                repositoryRoot,
+                batch.Skip(midpoint).ToArray(),
+                pendingDirectories,
+                visiblePaths,
+                options,
+                candidates,
+                warnings,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (GitCommandException exception)
+        {
+            warnings.Add(new OperationWarning(batch[0].AbsolutePath, exception.Message));
+            return;
+        }
+
+        foreach (var match in batch)
+        {
+            if (!ignoredPaths.Contains(match.RelativePath))
+            {
+                if (match.IsDirectory) pendingDirectories.Push(match.AbsolutePath);
+                continue;
+            }
+
+            if (ContainsVisibleContent(match.RelativePath, visiblePaths))
+            {
+                warnings.Add(new OperationWarning(match.AbsolutePath, "Ignored candidate contains tracked or otherwise visible content."));
+                continue;
+            }
+
+            var analysis = analyzer.Analyze(match.AbsolutePath, repositoryRoot, cancellationToken);
+            warnings.AddRange(analysis.Warnings);
+            if (analysis.IsSafe &&
+                analysis.Identity is not null &&
+                analysis.RepositoryIdentity is not null &&
+                (options.MinimumBytes is null || analysis.EstimatedBytes >= options.MinimumBytes.Value))
+            {
+                candidates.Add(new ArtifactCandidate(
+                    repositoryRoot,
+                    Path.GetFullPath(match.AbsolutePath),
+                    match.RelativePath,
+                    match.Rule.Id,
+                    match.Rule.Category,
+                    match.Rule.Preselected,
+                    analysis.FileCount,
+                    analysis.EstimatedBytes,
+                    analysis.Identity,
+                    analysis.RepositoryIdentity));
+            }
+        }
     }
 
     private static bool ContainsVisibleContent(string candidateRelativePath, IReadOnlyList<string> visiblePaths)
@@ -256,7 +366,13 @@ public sealed class RepositoryScanner
 
     private static string NormalizeRelativePath(string path) => path.Replace('\\', '/').TrimStart('/');
 
+    private static bool IsReservedRootQuarantine(string relativePath) =>
+        !relativePath.Contains('/', StringComparison.Ordinal) &&
+        relativePath.StartsWith(GitClient.QuarantineDirectoryPrefix, StringComparison.OrdinalIgnoreCase);
+
     private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private sealed record PendingMatch(string AbsolutePath, string RelativePath, bool IsDirectory, ArtifactRule Rule);
 }

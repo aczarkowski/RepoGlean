@@ -170,7 +170,191 @@ public sealed class CleanupServiceTests
         Assert.Contains("not moved or deleted", failed.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(File.Exists(Path.Combine(originalPath, "artifact.bin")));
         Assert.True(File.Exists(fixture.Repository.GetPath("obj/replacement.bin")));
-        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        Assert.Empty(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
+    }
+
+    [Fact]
+    public async Task Git_add_force_at_quarantine_boundary_revokes_cleanup_authority()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var observer = new TestMutationObserver(beforeQuarantineMove: (_, _, _) =>
+            fixture.Repository.GitAsync("add", "-f", "obj/artifact.bin").GetAwaiter().GetResult());
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("tracked", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+    }
+
+    [Fact]
+    public async Task Ignore_change_at_quarantine_boundary_revokes_cleanup_authority()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var observer = new TestMutationObserver(beforeQuarantineMove: (_, _, _) =>
+            fixture.Repository.Write(".gitignore", "different/\n"));
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("ignored", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+    }
+
+    [Fact]
+    public async Task Repository_root_replacement_at_quarantine_boundary_revokes_cleanup_authority()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var relocatedRepository = fixture.Temporary.GetPath("relocated-repository-root");
+        var observer = new TestMutationObserver(beforeQuarantineMove: (_, _, _) =>
+        {
+            Directory.Move(fixture.Repository.Path, relocatedRepository);
+            Directory.CreateDirectory(fixture.Repository.Path);
+            foreach (var entry in Directory.GetFileSystemEntries(relocatedRepository))
+            {
+                var destination = Path.Combine(fixture.Repository.Path, Path.GetFileName(entry));
+                if (Directory.Exists(entry)) Directory.Move(entry, destination);
+                else File.Move(entry, destination);
+            }
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("repository", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("identity", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+    }
+
+    [Fact]
+    public async Task Tracked_index_entry_created_while_original_path_is_absent_revokes_cleanup_authority()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (_, _, destinationPath) =>
+        {
+            var blob = fixture.Repository.GitAsync("hash-object", "-w", Path.Combine(destinationPath, "artifact.bin"))
+                .GetAwaiter().GetResult().Trim();
+            fixture.Repository.GitAsync("update-index", "--add", "--cacheinfo", $"100644,{blob},obj/artifact.bin")
+                .GetAwaiter().GetResult();
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("tracked", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+        Assert.Equal("obj/artifact.bin", (await fixture.Repository.GitAsync("ls-files", "obj/artifact.bin")).Trim());
+    }
+
+    [Fact]
+    public async Task Git_becoming_unavailable_after_ownership_recovers_and_reports_the_candidate()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var wrapper = fixture.Temporary.GetPath("git-disappears-after-ownership");
+        File.WriteAllText(wrapper, "#!/bin/sh\nexec git \"$@\"\n");
+        File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (_, _, _) => File.Delete(wrapper));
+
+        var result = await fixture.ExecuteAsync(
+            [candidate],
+            mutationObserver: observer,
+            cleanupGit: new GitClient(wrapper));
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("Git", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("restored", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+    }
+
+    [Fact]
+    public async Task Rule_marker_change_after_ownership_revokes_cleanup_authority()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        fixture.Repository.Write("obj/quarantined-marker.csproj", "<Project />");
+        var candidate = await fixture.ScanSingleAsync();
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (_, _, _) =>
+            fixture.Repository.GitAsync("rm", "--quiet", "project.csproj").GetAwaiter().GetResult());
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("rule", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+    }
+
+    [Fact]
+    public async Task Prior_stranded_quarantine_cannot_keep_a_later_candidate_rule_active()
+    {
+        using var fixture = await CleanupFixture.CreateAsync(includeSecondCandidate: true);
+        fixture.Repository.Write("obj/quarantined-marker.csproj", "<Project />");
+        var candidates = await fixture.ScanAsync();
+        var firstCandidate = Assert.Single(candidates, candidate => candidate.RelativePath == "obj");
+        var laterCandidate = Assert.Single(candidates, candidate => candidate.RelativePath == "src/obj");
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (candidate, _, _) =>
+        {
+            if (candidate != firstCandidate) return;
+            fixture.Repository.GitAsync("rm", "--quiet", "project.csproj").GetAwaiter().GetResult();
+            Directory.CreateDirectory(candidate.AbsolutePath);
+        });
+
+        var result = await fixture.ExecuteAsync(candidates, mutationObserver: observer);
+
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal(CleanupOutcome.Failed, result.Items[0].Outcome);
+        Assert.Equal(CleanupOutcome.Skipped, result.Items[1].Outcome);
+        Assert.Contains("rule", result.Items[1].Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(laterCandidate.AbsolutePath, "artifact.bin")));
+        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
+        Assert.True(File.Exists(Path.Combine(quarantine, "payload", "quarantined-marker.csproj")));
+    }
+
+    [Fact]
+    public async Task Ignore_change_at_final_deletion_boundary_revokes_cleanup_authority()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var observer = new TestMutationObserver(beforeRecursiveDelete: (_, _, _) =>
+            fixture.Repository.Write(".gitignore", "different/\n"));
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("ignored", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+    }
+
+    [Fact]
+    public async Task Tracked_quarantine_payload_at_final_boundary_revokes_cleanup_authority()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var observer = new TestMutationObserver(beforeRecursiveDelete: (_, _, destinationPath) =>
+        {
+            var relativePayload = Path.GetRelativePath(fixture.Repository.Path, destinationPath).Replace('\\', '/');
+            fixture.Repository.GitAsync("add", "-f", "--", $"{relativePayload}/artifact.bin")
+                .GetAwaiter().GetResult();
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("tracked", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
     }
 
     [Fact]
@@ -198,7 +382,7 @@ public sealed class CleanupServiceTests
         Assert.True(File.Exists(Path.Combine(relocatedRepository, "obj", "artifact.bin")));
         Assert.True(File.Exists(Path.Combine(outside, "keep.txt")));
         Assert.True(File.Exists(Path.Combine(outside, "obj", "replacement.bin")));
-        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        Assert.Empty(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
     }
 
     [Fact]
@@ -227,7 +411,7 @@ public sealed class CleanupServiceTests
         Assert.Equal(0, mover.MoveCalls);
         Assert.Equal(outsideBytes, File.ReadAllBytes(outsidePath));
         Assert.True(File.Exists(Path.Combine(relocatedRepository, "artifact.cache")));
-        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        Assert.Empty(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
     }
 
     [Fact]
@@ -261,7 +445,7 @@ public sealed class CleanupServiceTests
         Assert.Equal(1, mover.MoveCalls);
         Assert.True(Directory.Exists(candidate.AbsolutePath));
         Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
-        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        Assert.Empty(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
     }
 
     [Fact]
@@ -313,7 +497,7 @@ public sealed class CleanupServiceTests
         var failed = Assert.Single(result.Items);
         Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
         Assert.Contains("Injected quarantine cleanup failure", failed.Message, StringComparison.Ordinal);
-        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
         Assert.Contains(quarantine, failed.Message, StringComparison.Ordinal);
         Assert.True(Directory.Exists(candidate.AbsolutePath));
     }
@@ -338,13 +522,13 @@ public sealed class CleanupServiceTests
         Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
         Assert.Contains("interrupt", failed.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Injected quarantine cleanup failure", failed.Message, StringComparison.Ordinal);
-        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
         Assert.Contains(quarantine, failed.Message, StringComparison.Ordinal);
         Assert.True(Directory.Exists(candidate.AbsolutePath));
     }
 
     [Fact]
-    public async Task Child_swap_before_recursive_delete_removes_the_link_as_a_leaf_and_preserves_its_target()
+    public async Task Child_swap_before_recursive_delete_stops_cleanup_and_preserves_both_trees()
     {
         using var fixture = await CleanupFixture.CreateAsync();
         fixture.Repository.WriteBytes("obj/child/nested.bin", 3);
@@ -358,10 +542,205 @@ public sealed class CleanupServiceTests
 
         var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
 
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("snapshot", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(outsideChild, "nested.bin")));
+        Assert.True(Directory.Exists(Path.Combine(candidate.AbsolutePath, "child")));
+    }
+
+    [Fact]
+    public async Task Stable_descendant_link_is_deleted_as_a_leaf_and_its_target_survives()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var outside = fixture.Temporary.GetPath("outside-link-target");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "keep.bin"), "keep");
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (_, _, destinationPath) =>
+            Directory.CreateSymbolicLink(Path.Combine(destinationPath, "stable-link"), outside));
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
         var deleted = Assert.Single(result.Items);
         Assert.Equal(CleanupOutcome.Deleted, deleted.Outcome);
-        Assert.True(File.Exists(Path.Combine(outsideChild, "nested.bin")));
-        Assert.Empty(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        Assert.True(File.Exists(Path.Combine(outside, "keep.bin")));
+        Assert.False(Directory.Exists(candidate.AbsolutePath));
+    }
+
+    [Fact]
+    public async Task Descendant_directory_replacement_at_final_boundary_is_detected_before_deletion()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        fixture.Repository.WriteBytes("obj/child/original.bin", 3);
+        var candidate = await fixture.ScanSingleAsync();
+        var originalChild = fixture.Temporary.GetPath("original-child");
+        var observer = new TestMutationObserver(beforeRecursiveDelete: (_, _, destinationPath) =>
+        {
+            Directory.Move(Path.Combine(destinationPath, "child"), originalChild);
+            Directory.CreateDirectory(Path.Combine(destinationPath, "child"));
+            File.WriteAllText(Path.Combine(destinationPath, "child", "replacement.bin"), "replacement");
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("snapshot", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(originalChild, "original.bin")));
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "child", "replacement.bin")));
+    }
+
+    [Fact]
+    public async Task Descendant_insertion_at_final_boundary_is_detected_before_deletion()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        fixture.Repository.WriteBytes("obj/child/original.bin", 3);
+        var candidate = await fixture.ScanSingleAsync();
+        var observer = new TestMutationObserver(beforeRecursiveDelete: (_, _, destinationPath) =>
+            File.WriteAllText(Path.Combine(destinationPath, "child", "inserted.bin"), "inserted"));
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("snapshot", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "child", "inserted.bin")));
+    }
+
+    [Fact]
+    public async Task Descendant_removal_at_final_boundary_is_detected_before_deletion()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        fixture.Repository.WriteBytes("obj/child/original.bin", 3);
+        var candidate = await fixture.ScanSingleAsync();
+        var removedChild = fixture.Temporary.GetPath("removed-child");
+        var observer = new TestMutationObserver(beforeRecursiveDelete: (_, _, destinationPath) =>
+            Directory.Move(Path.Combine(destinationPath, "child"), removedChild));
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("snapshot", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(removedChild, "original.bin")));
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "artifact.bin")));
+    }
+
+    [Fact]
+    public async Task Child_mount_change_at_final_boundary_stops_before_traversal_and_preserves_content()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        fixture.Repository.WriteBytes("obj/child/nested.bin", 3);
+        var candidate = await fixture.ScanSingleAsync();
+        var identityProvider = new ToggleMountIdentityProvider();
+        var observer = new TestMutationObserver(beforeRecursiveDelete: (_, _, destinationPath) =>
+            identityProvider.ForeignMountPath = Path.Combine(destinationPath, "child"));
+
+        var result = await fixture.ExecuteAsync(
+            [candidate],
+            mutationObserver: observer,
+            identityProvider: identityProvider);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.Contains("mount", failed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(candidate.AbsolutePath, "child", "nested.bin")));
+    }
+
+    [Fact]
+    public async Task Payload_replacement_before_recovery_is_stranded_and_never_moved_to_the_original_path()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var ownedPayload = fixture.Temporary.GetPath("owned-payload");
+        string? destination = null;
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (_, _, destinationPath) =>
+        {
+            destination = destinationPath;
+            Directory.Move(destinationPath, ownedPayload);
+            Directory.CreateDirectory(destinationPath);
+            File.WriteAllText(Path.Combine(destinationPath, "unrelated.bin"), "unrelated");
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.NotNull(destination);
+        Assert.Contains(destination, failed.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(candidate.AbsolutePath));
+        Assert.True(File.Exists(Path.Combine(ownedPayload, "artifact.bin")));
+        Assert.True(File.Exists(Path.Combine(destination, "unrelated.bin")));
+    }
+
+    [Fact]
+    public async Task Repository_move_after_ownership_reports_the_exact_relocated_payload_path()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var relocatedRepository = fixture.Temporary.GetPath("repo-relocated-after-ownership");
+        string? relocatedPayload = null;
+        var observer = new TestMutationObserver(beforeMovedIdentityCheck: (_, _, destinationPath) =>
+        {
+            relocatedPayload = Path.Combine(
+                relocatedRepository,
+                Path.GetRelativePath(fixture.Repository.Path, destinationPath));
+            Directory.Move(fixture.Repository.Path, relocatedRepository);
+        });
+
+        var result = await fixture.ExecuteAsync([candidate], mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.NotNull(relocatedPayload);
+        Assert.Contains(relocatedPayload, failed.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(relocatedPayload, "artifact.bin")));
+        Assert.False(Directory.Exists(candidate.AbsolutePath));
+    }
+
+    [Fact]
+    public async Task Payload_replacement_immediately_before_reverse_move_is_stranded_and_never_recovered()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var fileSystem = new InterceptingCleanupFileSystem(candidate.AbsolutePath);
+        var ownedPayload = fixture.Temporary.GetPath("owned-before-reverse-move");
+        string? destination = null;
+        var observer = new TestMutationObserver(beforeRecoveryMove: (_, _, destinationPath, _) =>
+        {
+            destination = destinationPath;
+            Directory.Move(destinationPath, ownedPayload);
+            Directory.CreateDirectory(destinationPath);
+            File.WriteAllText(Path.Combine(destinationPath, "unrelated.bin"), "unrelated");
+        });
+
+        var result = await fixture.ExecuteAsync(
+            [candidate],
+            fileSystem: fileSystem,
+            mutationObserver: observer);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.NotNull(destination);
+        Assert.Contains(destination, failed.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(candidate.AbsolutePath));
+        Assert.True(File.Exists(Path.Combine(ownedPayload, "artifact.bin")));
+        Assert.True(File.Exists(Path.Combine(destination, "unrelated.bin")));
+    }
+
+    [Fact]
+    public async Task Quarantine_is_created_inside_the_writable_repository_not_the_broad_requested_root()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var fileSystem = new RepositoryOnlyQuarantineFileSystem(fixture.Repository.Path, fixture.Temporary.Path);
+
+        var result = await fixture.ExecuteAsync([candidate], fileSystem: fileSystem);
+
+        var deleted = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Deleted, deleted.Outcome);
+        Assert.Equal(fixture.Repository.Path, fileSystem.QuarantineParent);
     }
 
     [Fact]
@@ -413,7 +792,12 @@ public sealed class CleanupServiceTests
         Assert.Equal(CleanupOutcome.Failed, result.Items[1].Outcome);
         Assert.Contains("interrupt", result.Items[1].Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(candidates[0].AbsolutePath));
-        Assert.True(Directory.Exists(candidates[1].AbsolutePath));
+        Assert.False(Directory.Exists(candidates[1].AbsolutePath));
+        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
+        var strandedPayload = Path.Combine(quarantine, "payload");
+        Assert.True(Directory.Exists(strandedPayload));
+        Assert.Contains(strandedPayload, result.Items[1].Message, StringComparison.Ordinal);
+        Assert.Contains("partial", result.Items[1].Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(Directory.Exists(candidates[2].AbsolutePath));
     }
 
@@ -428,9 +812,12 @@ public sealed class CleanupServiceTests
 
         var failed = Assert.Single(result.Items);
         Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.True(failed.DeletionCompleted);
+        Assert.Equal(1, result.DeletedCount);
+        Assert.Equal(candidate.EstimatedBytes, result.EstimatedDeletedBytes);
         Assert.Contains("empty quarantine", failed.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(candidate.AbsolutePath));
-        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Temporary.Path, ".devcleaner-quarantine-*"));
+        var quarantine = Assert.Single(Directory.GetDirectories(fixture.Repository.Path, ".devcleaner-quarantine-*"));
         Assert.Empty(Directory.GetFileSystemEntries(quarantine));
         Assert.Contains(quarantine, failed.Message, StringComparison.Ordinal);
     }
@@ -502,10 +889,11 @@ public sealed class CleanupServiceTests
             ICleanupFileSystem? fileSystem = null,
             ICleanupMutationObserver? mutationObserver = null,
             IAtomicFileMover? atomicFileMover = null,
-            IFileSystemIdentityProvider? identityProvider = null)
+            IFileSystemIdentityProvider? identityProvider = null,
+            GitClient? cleanupGit = null)
         {
             var service = new CleanupService(
-                git,
+                cleanupGit ?? git,
                 fileSystem: fileSystem,
                 mutationObserver: mutationObserver,
                 identityProvider: identityProvider,
@@ -521,7 +909,8 @@ public sealed class CleanupServiceTests
     private sealed class TestMutationObserver(
         Action<ArtifactCandidate, string, string>? beforeQuarantineMove = null,
         Action<ArtifactCandidate, string, string>? beforeMovedIdentityCheck = null,
-        Action<ArtifactCandidate, string, string>? beforeRecursiveDelete = null) : ICleanupMutationObserver
+        Action<ArtifactCandidate, string, string>? beforeRecursiveDelete = null,
+        Action<ArtifactCandidate, string, string, string>? beforeRecoveryMove = null) : ICleanupMutationObserver
     {
         public void BeforeQuarantineMove(ArtifactCandidate candidate, string quarantineRoot, string destinationPath) =>
             beforeQuarantineMove?.Invoke(candidate, quarantineRoot, destinationPath);
@@ -531,6 +920,13 @@ public sealed class CleanupServiceTests
 
         public void BeforeRecursiveDelete(ArtifactCandidate candidate, string quarantineRoot, string destinationPath) =>
             beforeRecursiveDelete?.Invoke(candidate, quarantineRoot, destinationPath);
+
+        public void BeforeRecoveryMove(
+            ArtifactCandidate candidate,
+            string quarantineRoot,
+            string destinationPath,
+            string candidatePath) =>
+            beforeRecoveryMove?.Invoke(candidate, quarantineRoot, destinationPath, candidatePath);
     }
 
     private sealed class FailingAtomicFileMover : IAtomicFileMover
@@ -586,6 +982,37 @@ public sealed class CleanupServiceTests
             Path.GetFileName(path).StartsWith(".devcleaner-quarantine-", StringComparison.Ordinal);
     }
 
+    private sealed class ToggleMountIdentityProvider : IFileSystemIdentityProvider
+    {
+        private readonly FileSystemIdentityProvider inner = new();
+
+        public string? ForeignMountPath { get; set; }
+
+        public bool TryGetIdentity(string path, out FileSystemIdentity? identity, out string? error)
+        {
+            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null) return false;
+            if (ForeignMountPath is not null &&
+                string.Equals(Path.GetFullPath(path), Path.GetFullPath(ForeignMountPath), StringComparison.Ordinal))
+            {
+                identity = identity with { MountId = "injected-foreign-mount" };
+            }
+
+            return true;
+        }
+
+        public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? identity, out string? error)
+        {
+            if (!TryGetIdentity(path, out var fileIdentity, out error) || fileIdentity is null)
+            {
+                identity = null;
+                return false;
+            }
+
+            identity = new FileSystemMountIdentity(fileIdentity.VolumeId, fileIdentity.MountId);
+            return true;
+        }
+    }
+
     public enum EarlyQuarantineFailure
     {
         IdentityUnavailable,
@@ -631,9 +1058,11 @@ public sealed class CleanupServiceTests
             return inner.GetAttributes(path);
         }
 
+        public IReadOnlyList<string> GetFileSystemEntries(string path) => inner.GetFileSystemEntries(path);
+
         public void CreateDirectory(string path) => inner.CreateDirectory(path);
 
-        public void DeleteOwnedObject(string path, bool isDirectory, CancellationToken cancellationToken)
+        public void DeleteFile(string path)
         {
             ownedDeleteCalls++;
             if (failingPath is not null && !deletionFailureInjected)
@@ -644,14 +1073,12 @@ public sealed class CleanupServiceTests
 
             if (ownedDeleteCalls == cancelAfterFileDeleteOnCall)
             {
-                var file = Directory.GetFiles(path, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First();
-                File.Delete(file);
+                inner.DeleteFile(path);
                 cancellation?.Cancel();
-                throw new OperationCanceledException(cancellationToken);
+                throw new OperationCanceledException(cancellation?.Token ?? CancellationToken.None);
             }
 
-            inner.DeleteOwnedObject(path, isDirectory, cancellationToken);
-            cancelAfterDirectoryDelete?.Cancel();
+            inner.DeleteFile(path);
         }
 
         public void DeleteDirectory(string path)
@@ -664,5 +1091,36 @@ public sealed class CleanupServiceTests
             inner.DeleteDirectory(path);
             cancelAfterDirectoryDelete?.Cancel();
         }
+    }
+
+    private sealed class RepositoryOnlyQuarantineFileSystem(string repositoryRoot, string broadRoot) : ICleanupFileSystem
+    {
+        private readonly SystemCleanupFileSystem inner = new();
+
+        public string? QuarantineParent { get; private set; }
+
+        public FileAttributes GetAttributes(string path) => inner.GetAttributes(path);
+
+        public IReadOnlyList<string> GetFileSystemEntries(string path) => inner.GetFileSystemEntries(path);
+
+        public void CreateDirectory(string path)
+        {
+            if (Path.GetFileName(path).StartsWith(".devcleaner-quarantine-", StringComparison.Ordinal))
+            {
+                QuarantineParent = Path.GetDirectoryName(path);
+                if (string.Equals(QuarantineParent, Path.GetFullPath(broadRoot), StringComparison.Ordinal))
+                {
+                    throw new UnauthorizedAccessException("Injected broad-root write denial.");
+                }
+
+                Assert.Equal(Path.GetFullPath(repositoryRoot), QuarantineParent);
+            }
+
+            inner.CreateDirectory(path);
+        }
+
+        public void DeleteFile(string path) => inner.DeleteFile(path);
+
+        public void DeleteDirectory(string path) => inner.DeleteDirectory(path);
     }
 }

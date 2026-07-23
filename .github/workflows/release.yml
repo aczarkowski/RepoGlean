@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    name: ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            rid: win-x64
+            executable: DevCleaner.exe
+            package_executable: devcleaner.exe
+          - runner: windows-11-arm
+            rid: win-arm64
+            executable: DevCleaner.exe
+            package_executable: devcleaner.exe
+          - runner: macos-15-intel
+            rid: osx-x64
+            executable: DevCleaner
+            package_executable: devcleaner
+          - runner: macos-15
+            rid: osx-arm64
+            executable: DevCleaner
+            package_executable: devcleaner
+          - runner: ubuntu-24.04
+            rid: linux-x64
+            executable: DevCleaner
+            package_executable: devcleaner
+          - runner: ubuntu-24.04-arm
+            rid: linux-arm64
+            executable: DevCleaner
+            package_executable: devcleaner
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore once
+        run: dotnet restore src/DevCleaner/DevCleaner.csproj -r "${{ matrix.rid }}"
+
+      - name: Publish matching-architecture Native AOT executable
+        run: >-
+          dotnet publish src/DevCleaner/DevCleaner.csproj
+          -c Release
+          -r "${{ matrix.rid }}"
+          --self-contained
+          --no-restore
+          -p:PublishAot=true
+          -p:Version="${GITHUB_REF_NAME#v}"
+          -o "artifacts/native/${{ matrix.rid }}"
+
+      - name: Smoke-test release executable
+        run: '"artifacts/native/${{ matrix.rid }}/${{ matrix.executable }}" --version'
+
+      - name: Package executable, license, and README
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE: ${{ matrix.executable }}
+          PACKAGE_EXECUTABLE: ${{ matrix.package_executable }}
+        run: |
+          package="artifacts/package/devcleaner-${RID}"
+          mkdir -p "$package"
+          cp "artifacts/native/${RID}/${EXECUTABLE}" "$package/${PACKAGE_EXECUTABLE}"
+          cp LICENSE README.md "$package/"
+          archive_name="devcleaner-${RID}.tar.gz"
+          archive="artifacts/${archive_name}"
+          tar -czf "$archive" -C artifacts/package "devcleaner-${RID}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd artifacts && sha256sum "$archive_name" > "$archive_name.sha256")
+          else
+            (cd artifacts && shasum -a 256 "$archive_name" > "$archive_name.sha256")
+          fi
+
+      - name: Upload release archive and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: devcleaner-${{ matrix.rid }}
+          path: |
+            artifacts/devcleaner-${{ matrix.rid }}.tar.gz
+            artifacts/devcleaner-${{ matrix.rid }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs: build-native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: devcleaner-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attach archives and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes
+          fi

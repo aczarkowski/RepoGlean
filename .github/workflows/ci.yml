@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-native:
+    name: ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            rid: win-x64
+            executable: DevCleaner.exe
+          - runner: macos-latest
+            rid: osx-arm64
+            executable: DevCleaner
+          - runner: ubuntu-latest
+            rid: linux-x64
+            executable: DevCleaner
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore once
+        run: dotnet restore DevCleaner.slnx -r "${{ matrix.rid }}"
+
+      - name: Build with warnings as errors
+        run: dotnet build DevCleaner.slnx --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test DevCleaner.slnx --no-build
+
+      - name: Publish host Native AOT executable
+        run: >-
+          dotnet publish src/DevCleaner/DevCleaner.csproj
+          -c Release
+          -r "${{ matrix.rid }}"
+          --self-contained
+          --no-restore
+          -p:PublishAot=true
+          -o "artifacts/native/${{ matrix.rid }}"
+
+      - name: Smoke-test host executable
+        run: '"artifacts/native/${{ matrix.rid }}/${{ matrix.executable }}" --version'

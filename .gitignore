@@ -209,6 +209,13 @@ DocProject/Help/html
 # Click-Once directory
 publish/
 
+# DevCleaner worktrees and local verification output
+.worktrees/
+**/bin/
+**/obj/
+TestResults/
+artifacts/
+
 # Publish Web Output
 *.[Pp]ublish.xml
 *.azurePubxml

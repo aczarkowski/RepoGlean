@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DevCleaner configuration",
+  "description": "Configuration schema for DevCleaner v1.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "description": "Configuration contract version.",
+      "const": 1
+    },
+    "roots": {
+      "description": "Roots searched when no root is supplied on the command line.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": []
+    },
+    "excludes": {
+      "description": "Absolute paths or root/repository-relative paths and globs excluded from discovery and scanning.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": []
+    },
+    "disabledRules": {
+      "description": "Built-in rule IDs to disable.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "customRules": {
+      "description": "Additional repository-relative artifact rules. Custom rules are never preselected in v1.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/customRule"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "customRule": {
+      "type": "object",
+      "required": [
+        "id",
+        "category",
+        "patterns"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stable lowercase ID that does not collide with a built-in or another custom rule.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+        },
+        "category": {
+          "description": "Standard artifact category.",
+          "enum": [
+            "Build",
+            "Cache",
+            "Test",
+            "Ide",
+            "Dependency"
+          ]
+        },
+        "patterns": {
+          "description": "One or more non-empty repository-relative candidate globs without dot segments.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/repositoryRelativeGlob"
+          }
+        },
+        "markers": {
+          "description": "Optional repository-relative globs; at least one visible marker activates the rule.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/repositoryRelativeGlob"
+          },
+          "default": []
+        },
+        "preselected": {
+          "description": "Custom rules cannot be preselected in v1.",
+          "const": false,
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "repositoryRelativeGlob": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "not": {
+            "pattern": "^(?:/|[A-Za-z]:)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|[\\\\/])\\.{1,2}(?:[\\\\/]|$)"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -86,6 +86,42 @@ public sealed class VerboseProgressRendererTests
             "Cleanup failed: Cleanup was cancelled.");
     }
 
+    [Fact]
+    public void Report_removes_control_characters_from_event_supplied_text()
+    {
+        using var writer = new StringWriter { NewLine = "\r\n" };
+        var renderer = new VerboseProgressRenderer(writer);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Scan,
+            Roots: ["/work\r\n\u001b[31mred"]));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanStarted,
+            ProgressOperation.Scan,
+            Path: "/work/my\r\n\u001b[31m-api",
+            Current: 1,
+            Total: 1));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Warning,
+            ProgressOperation.Scan,
+            Path: "/work/unreadable\r\n\u001b[31m",
+            Message: "Unable to inspect\r\n\u001b[31m path."));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Failed,
+            ProgressOperation.Scan,
+            Message: "Git\r\n\u001b[31m failed."));
+
+        var output = writer.ToString();
+        Assert.Contains("/work[31mred", output, StringComparison.Ordinal);
+        Assert.Contains("/work/my[31m-api", output, StringComparison.Ordinal);
+        Assert.Contains("Warning: /work/unreadable[31m: Unable to inspect[31m path.", output, StringComparison.Ordinal);
+        Assert.Contains("Scan failed: Git[31m failed.", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b", output, StringComparison.Ordinal);
+        Assert.Equal(4, output.Count(character => character == '\n'));
+    }
+
     private static void AssertContainsInOrder(string output, params string[] expectedLines)
     {
         var position = 0;

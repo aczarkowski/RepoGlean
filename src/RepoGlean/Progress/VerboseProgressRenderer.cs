@@ -53,12 +53,12 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
     {
         ProgressEventKind.DiscoveryStarted => $"Discovering repositories under {ProgressText.FormatRoots(progressEvent.Roots)}...",
         ProgressEventKind.DiscoveryCompleted => $"Found {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}.",
-        ProgressEventKind.RepositoryScanStarted => $"Scanning [{progressEvent.Current}/{progressEvent.Total}] {progressEvent.Path ?? "(unknown)"}...",
+        ProgressEventKind.RepositoryScanStarted => $"Scanning [{progressEvent.Current}/{progressEvent.Total}] {DisplayValue(progressEvent.Path)}...",
         ProgressEventKind.RepositoryScanCompleted when progressEvent.CurrentCandidateCount > 0 =>
             $"Found {progressEvent.CurrentCandidateCount} {ProgressText.Plural(progressEvent.CurrentCandidateCount, "candidate", "candidates")} in {ProgressText.DisplayPath(progressEvent.Path)} ({ProgressText.FormatBytes(progressEvent.CurrentEstimatedBytes)}).",
-        ProgressEventKind.CandidateStarted => $"Validating [{progressEvent.Current}/{progressEvent.Total}] {progressEvent.Path ?? "(unknown)"}...",
+        ProgressEventKind.CandidateStarted => $"Validating [{progressEvent.Current}/{progressEvent.Total}] {DisplayValue(progressEvent.Path)}...",
         ProgressEventKind.CandidateCompleted => FormatCandidateOutcome(progressEvent),
-        ProgressEventKind.Warning => $"Warning: {progressEvent.Path ?? "(unknown)"}: {progressEvent.Message ?? "(no details)"}",
+        ProgressEventKind.Warning => $"Warning: {DisplayValue(progressEvent.Path)}: {DisplayValue(progressEvent.Message, "(no details)")}",
         ProgressEventKind.Completed => FormatCompleted(progressEvent),
         ProgressEventKind.Interrupted => FormatInterrupted(progressEvent),
         ProgressEventKind.Failed => FormatFailed(progressEvent),
@@ -99,7 +99,7 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
         var operation = progressEvent.Operation == ProgressOperation.Scan ? "Scan" : "Cleanup";
         return string.IsNullOrWhiteSpace(progressEvent.Message)
             ? $"{operation} failed."
-            : $"{operation} failed: {progressEvent.Message}";
+            : $"{operation} failed: {ProgressText.Sanitize(progressEvent.Message)}";
     }
 
     private static string CleanupAggregate(OperationProgressEvent progressEvent) =>
@@ -111,12 +111,19 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
 
     private static string FormatCandidatePath(string? path)
     {
-        if (string.IsNullOrWhiteSpace(path)) return "(unknown)";
+        var sanitized = ProgressText.Sanitize(path);
+        if (string.IsNullOrWhiteSpace(sanitized)) return "(unknown)";
 
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var trimmed = sanitized.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var parent = Path.GetDirectoryName(trimmed);
         var parentName = ProgressText.DisplayPath(parent);
         var name = ProgressText.DisplayPath(trimmed);
         return parentName == "(unknown)" ? name : $"{parentName}/{name}";
+    }
+
+    private static string DisplayValue(string? value, string fallback = "(unknown)")
+    {
+        var sanitized = ProgressText.Sanitize(value);
+        return string.IsNullOrWhiteSpace(sanitized) ? fallback : sanitized;
     }
 }

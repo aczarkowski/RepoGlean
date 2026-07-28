@@ -2,6 +2,7 @@ using RepoGlean.Cleaning;
 using RepoGlean.Cli;
 using RepoGlean.Configuration;
 using RepoGlean.Git;
+using RepoGlean.Progress;
 using RepoGlean.Rules;
 using RepoGlean.Scanning;
 using RepoGlean.Tests.Support;
@@ -10,6 +11,129 @@ namespace RepoGlean.Tests.Cleaning;
 
 public sealed class CleanupServiceTests
 {
+    [Fact]
+    public async Task Execute_reports_deleted_candidate_with_authoritative_counts_and_bytes()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var progress = new RecordingProgress();
+
+        var result = await fixture.ExecuteAsync([candidate], progress: progress);
+
+        var deleted = Assert.Single(result.Items);
+        Assert.True(deleted.DeletionCompleted);
+        Assert.Equal(1, result.DeletedCount);
+        Assert.Equal(candidate.EstimatedBytes, result.EstimatedDeletedBytes);
+        var events = AssertCandidateEvents(progress, candidate, dryRun: false);
+        Assert.Equal(ProgressCandidateOutcome.Deleted, events.Completed.Outcome);
+        Assert.Equal(1, events.Completed.DeletedCount);
+        Assert.Equal(0, events.Completed.ValidatedCount);
+        Assert.Equal(0, events.Completed.SkippedCount);
+        Assert.Equal(0, events.Completed.FailedCount);
+        Assert.Equal(candidate.EstimatedBytes, events.Completed.EstimatedBytes);
+    }
+
+    [Fact]
+    public async Task Dry_run_reports_validated_candidate_without_deleted_accounting()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var progress = new RecordingProgress();
+
+        var result = await fixture.ExecuteAsync([candidate], dryRun: true, progress: progress);
+
+        var validated = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Skipped, validated.Outcome);
+        Assert.True(result.DryRun);
+        Assert.Equal(0, result.DeletedCount);
+        Assert.Equal(1, result.SkippedCount);
+        Assert.Equal(0, result.EstimatedDeletedBytes);
+        var events = AssertCandidateEvents(progress, candidate, dryRun: true);
+        Assert.Equal(ProgressCandidateOutcome.Validated, events.Completed.Outcome);
+        Assert.Equal(0, events.Completed.DeletedCount);
+        Assert.Equal(1, events.Completed.ValidatedCount);
+        Assert.Equal(0, events.Completed.SkippedCount);
+        Assert.Equal(0, events.Completed.FailedCount);
+        Assert.Equal(candidate.EstimatedBytes, events.Completed.EstimatedBytes);
+    }
+
+    [Fact]
+    public async Task Safety_rejection_reports_skipped_candidate_only()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        await fixture.Repository.GitAsync("add", "-f", "obj/artifact.bin");
+        var progress = new RecordingProgress();
+
+        var result = await fixture.ExecuteAsync([candidate], progress: progress);
+
+        AssertSkipped(result, "visible");
+        Assert.Equal(1, result.SkippedCount);
+        var events = AssertCandidateEvents(progress, candidate, dryRun: false);
+        Assert.Equal(ProgressCandidateOutcome.Skipped, events.Completed.Outcome);
+        Assert.Equal(0, events.Completed.DeletedCount);
+        Assert.Equal(0, events.Completed.ValidatedCount);
+        Assert.Equal(1, events.Completed.SkippedCount);
+        Assert.Equal(0, events.Completed.FailedCount);
+        Assert.Equal(0, events.Completed.EstimatedBytes);
+    }
+
+    [Fact]
+    public async Task Cleanup_failure_reports_failed_candidate_only()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var progress = new RecordingProgress();
+
+        var result = await fixture.ExecuteAsync(
+            [candidate],
+            atomicFileMover: new FailingAtomicFileMover(),
+            progress: progress);
+
+        var failed = Assert.Single(result.Items);
+        Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
+        Assert.False(failed.DeletionCompleted);
+        Assert.Equal(1, result.FailedCount);
+        var events = AssertCandidateEvents(progress, candidate, dryRun: false);
+        Assert.Equal(ProgressCandidateOutcome.Failed, events.Completed.Outcome);
+        Assert.Equal(0, events.Completed.DeletedCount);
+        Assert.Equal(0, events.Completed.ValidatedCount);
+        Assert.Equal(0, events.Completed.SkippedCount);
+        Assert.Equal(1, events.Completed.FailedCount);
+        Assert.Equal(0, events.Completed.EstimatedBytes);
+    }
+
+    [Fact]
+    public async Task Execute_preserves_cleanup_when_progress_reporting_fails()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var progress = new ThrowingProgress(new InvalidOperationException("injected progress failure"));
+
+        var result = await fixture.ExecuteAsync([candidate], progress: progress);
+
+        var deleted = Assert.Single(result.Items);
+        Assert.True(deleted.DeletionCompleted);
+        Assert.False(Directory.Exists(candidate.AbsolutePath));
+        Assert.Equal(2, progress.ReportCount);
+    }
+
+    [Fact]
+    public async Task Execute_does_not_swallow_catastrophic_progress_failures()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var failure = new OutOfMemoryException("injected catastrophic progress failure");
+        var progress = new ThrowingProgress(failure);
+
+        var exception = await Assert.ThrowsAsync<OutOfMemoryException>(() =>
+            fixture.ExecuteAsync([candidate], progress: progress));
+
+        Assert.Same(failure, exception);
+        Assert.True(Directory.Exists(candidate.AbsolutePath));
+        Assert.Equal(1, progress.ReportCount);
+    }
+
     [Fact]
     public async Task Execute_deletes_a_revalidated_ignored_candidate()
     {
@@ -750,12 +874,15 @@ public sealed class CleanupServiceTests
         var candidates = await fixture.ScanAsync();
         var failingPath = candidates[0].AbsolutePath;
         var fileSystem = new InterceptingCleanupFileSystem(failingPath);
+        var progress = new RecordingProgress();
 
-        var result = await fixture.ExecuteAsync(candidates, fileSystem: fileSystem);
+        var result = await fixture.ExecuteAsync(candidates, fileSystem: fileSystem, progress: progress);
 
         Assert.Equal(2, result.Items.Count);
         Assert.Contains(result.Items, item => item.Candidate.AbsolutePath == failingPath && item.Outcome == CleanupOutcome.Failed);
         Assert.Contains(result.Items, item => item.Candidate.AbsolutePath != failingPath && item.Outcome == CleanupOutcome.Deleted);
+        Assert.Equal([1, 1, 2, 2], progress.Events.Select(item => item.Current));
+        Assert.All(progress.Events, item => Assert.Equal(candidates.Count, item.Total));
     }
 
     [Fact]
@@ -765,14 +892,28 @@ public sealed class CleanupServiceTests
         var candidates = await fixture.ScanAsync();
         using var cancellation = new CancellationTokenSource();
         var fileSystem = new InterceptingCleanupFileSystem(cancelAfterDirectoryDelete: cancellation);
+        var progress = new RecordingProgress();
 
-        var result = await fixture.ExecuteAsync(candidates, cancellationToken: cancellation.Token, fileSystem: fileSystem);
+        var result = await fixture.ExecuteAsync(
+            candidates,
+            cancellationToken: cancellation.Token,
+            fileSystem: fileSystem,
+            progress: progress);
 
         Assert.True(result.IsInterrupted);
         var completed = Assert.Single(result.Items);
         Assert.Equal(CleanupOutcome.Deleted, completed.Outcome);
         Assert.False(Directory.Exists(completed.Candidate.AbsolutePath));
         Assert.True(Directory.Exists(candidates[1].AbsolutePath));
+        Assert.Equal(
+            [ProgressEventKind.CandidateStarted, ProgressEventKind.CandidateCompleted],
+            progress.Events.Select(item => item.Kind));
+        Assert.All(progress.Events, item =>
+        {
+            Assert.Equal(1, item.Current);
+            Assert.Equal(candidates.Count, item.Total);
+        });
+        Assert.DoesNotContain(progress.Events, item => item.Path == candidates[1].AbsolutePath);
     }
 
     [Fact]
@@ -807,19 +948,55 @@ public sealed class CleanupServiceTests
         using var fixture = await CleanupFixture.CreateAsync();
         var candidate = await fixture.ScanSingleAsync();
         var fileSystem = new InterceptingCleanupFileSystem(failQuarantineCleanup: true);
+        var progress = new RecordingProgress();
 
-        var result = await fixture.ExecuteAsync([candidate], fileSystem: fileSystem);
+        var result = await fixture.ExecuteAsync([candidate], fileSystem: fileSystem, progress: progress);
 
         var failed = Assert.Single(result.Items);
         Assert.Equal(CleanupOutcome.Failed, failed.Outcome);
         Assert.True(failed.DeletionCompleted);
         Assert.Equal(1, result.DeletedCount);
+        Assert.Equal(1, result.FailedCount);
         Assert.Equal(candidate.EstimatedBytes, result.EstimatedDeletedBytes);
         Assert.Contains("empty quarantine", failed.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(candidate.AbsolutePath));
         var quarantine = Assert.Single(Directory.GetDirectories(fixture.Repository.Path, ".repoglean-quarantine-*"));
         Assert.Empty(Directory.GetFileSystemEntries(quarantine));
         Assert.Contains(quarantine, failed.Message, StringComparison.Ordinal);
+        var events = AssertCandidateEvents(progress, candidate, dryRun: false);
+        Assert.Equal(ProgressCandidateOutcome.Deleted, events.Completed.Outcome);
+        Assert.Equal(1, events.Completed.DeletedCount);
+        Assert.Equal(0, events.Completed.FailedCount);
+        Assert.Equal(candidate.EstimatedBytes, events.Completed.EstimatedBytes);
+    }
+
+    private static (OperationProgressEvent Started, OperationProgressEvent Completed) AssertCandidateEvents(
+        RecordingProgress progress,
+        ArtifactCandidate candidate,
+        bool dryRun)
+    {
+        Assert.Equal(2, progress.Events.Count);
+        var started = progress.Events[0];
+        Assert.Equal(ProgressEventKind.CandidateStarted, started.Kind);
+        Assert.Equal(ProgressOperation.Clean, started.Operation);
+        Assert.Equal(candidate.AbsolutePath, started.Path);
+        Assert.Equal(1, started.Current);
+        Assert.Equal(1, started.Total);
+        Assert.Equal(0, started.DeletedCount);
+        Assert.Equal(0, started.ValidatedCount);
+        Assert.Equal(0, started.SkippedCount);
+        Assert.Equal(0, started.FailedCount);
+        Assert.Equal(0, started.EstimatedBytes);
+        Assert.Equal(dryRun, started.DryRun);
+
+        var completed = progress.Events[1];
+        Assert.Equal(ProgressEventKind.CandidateCompleted, completed.Kind);
+        Assert.Equal(ProgressOperation.Clean, completed.Operation);
+        Assert.Equal(candidate.AbsolutePath, completed.Path);
+        Assert.Equal(1, completed.Current);
+        Assert.Equal(1, completed.Total);
+        Assert.Equal(dryRun, completed.DryRun);
+        return (started, completed);
     }
 
     private static void AssertSkipped(CleanupResult result, string messageFragment)
@@ -890,14 +1067,16 @@ public sealed class CleanupServiceTests
             ICleanupMutationObserver? mutationObserver = null,
             IAtomicFileMover? atomicFileMover = null,
             IFileSystemIdentityProvider? identityProvider = null,
-            GitClient? cleanupGit = null)
+            GitClient? cleanupGit = null,
+            IOperationProgress? progress = null)
         {
             var service = new CleanupService(
                 cleanupGit ?? git,
                 fileSystem: fileSystem,
                 mutationObserver: mutationObserver,
                 identityProvider: identityProvider,
-                atomicFileMover: atomicFileMover);
+                atomicFileMover: atomicFileMover,
+                progress: progress);
             return service.ExecuteAsync(
                 new CleanupRequest(candidates, requestedRoots ?? [Temporary.Path], rules, dryRun),
                 cancellationToken);
@@ -951,6 +1130,27 @@ public sealed class CleanupServiceTests
             MoveCalls++;
             inner.MoveNoCopy(sourcePath, destinationPath);
         }
+    }
+
+    private sealed class ThrowingProgress(Exception failure) : IOperationProgress
+    {
+        public int ReportCount { get; private set; }
+
+        public void Report(OperationProgressEvent progressEvent)
+        {
+            ReportCount++;
+            throw failure;
+        }
+
+        public void Pause()
+        {
+        }
+
+        public void Resume()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class InterceptingIdentityProvider(EarlyQuarantineFailure failure) : IFileSystemIdentityProvider

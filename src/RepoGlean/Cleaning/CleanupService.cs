@@ -1,4 +1,5 @@
 using RepoGlean.Git;
+using RepoGlean.Progress;
 using RepoGlean.Scanning;
 
 namespace RepoGlean.Cleaning;
@@ -7,6 +8,7 @@ public sealed class CleanupService
 {
     private readonly CleanupAuthorityValidator authorityValidator;
     private readonly QuarantineCleanup quarantineCleanup;
+    private readonly IOperationProgress progress;
 
     public CleanupService(GitClient git)
         : this(git, null, null)
@@ -19,9 +21,11 @@ public sealed class CleanupService
         ICleanupFileSystem? fileSystem = null,
         ICleanupMutationObserver? mutationObserver = null,
         IFileSystemIdentityProvider? identityProvider = null,
-        IAtomicFileMover? atomicFileMover = null)
+        IAtomicFileMover? atomicFileMover = null,
+        IOperationProgress? progress = null)
     {
         ArgumentNullException.ThrowIfNull(git);
+        this.progress = progress ?? NullOperationProgress.Instance;
         var resolvedIdentityProvider = identityProvider ?? new FileSystemIdentityProvider();
         var resolvedAnalyzer = analyzer ?? new FileTreeAnalyzer(resolvedIdentityProvider);
         var resolvedFileSystem = fileSystem ?? new SystemCleanupFileSystem();
@@ -59,6 +63,58 @@ public sealed class CleanupService
             .ToArray();
         var results = new List<CleanupCandidateResult>();
         var interrupted = cancellationToken.IsCancellationRequested;
+        long deletedCount = 0;
+        long validatedCount = 0;
+        long skippedCount = 0;
+        long failedCount = 0;
+        long processedEstimatedBytes = 0;
+
+        void RecordResult(CleanupCandidateResult result, bool validated = false)
+        {
+            results.Add(result);
+            var outcome = validated
+                ? ProgressCandidateOutcome.Validated
+                : result.DeletionCompleted
+                    ? ProgressCandidateOutcome.Deleted
+                    : result.Outcome == CleanupOutcome.Skipped
+                        ? ProgressCandidateOutcome.Skipped
+                        : ProgressCandidateOutcome.Failed;
+            switch (outcome)
+            {
+                case ProgressCandidateOutcome.Deleted:
+                    deletedCount++;
+                    processedEstimatedBytes = FileTreeAnalyzer.SaturatingAdd(
+                        processedEstimatedBytes,
+                        result.Candidate.EstimatedBytes);
+                    break;
+                case ProgressCandidateOutcome.Validated:
+                    validatedCount++;
+                    processedEstimatedBytes = FileTreeAnalyzer.SaturatingAdd(
+                        processedEstimatedBytes,
+                        result.Candidate.EstimatedBytes);
+                    break;
+                case ProgressCandidateOutcome.Skipped:
+                    skippedCount++;
+                    break;
+                case ProgressCandidateOutcome.Failed:
+                    failedCount++;
+                    break;
+            }
+
+            ReportProgress(new OperationProgressEvent(
+                ProgressEventKind.CandidateCompleted,
+                ProgressOperation.Clean,
+                Path: result.Candidate.AbsolutePath,
+                Current: results.Count,
+                Total: request.Candidates.Count,
+                DeletedCount: deletedCount,
+                ValidatedCount: validatedCount,
+                SkippedCount: skippedCount,
+                FailedCount: failedCount,
+                EstimatedBytes: processedEstimatedBytes,
+                DryRun: request.DryRun,
+                Outcome: outcome));
+        }
 
         foreach (var candidate in request.Candidates)
         {
@@ -68,6 +124,18 @@ public sealed class CleanupService
                 break;
             }
 
+            ReportProgress(new OperationProgressEvent(
+                ProgressEventKind.CandidateStarted,
+                ProgressOperation.Clean,
+                Path: candidate.AbsolutePath,
+                Current: results.Count + 1,
+                Total: request.Candidates.Count,
+                DeletedCount: deletedCount,
+                ValidatedCount: validatedCount,
+                SkippedCount: skippedCount,
+                FailedCount: failedCount,
+                EstimatedBytes: processedEstimatedBytes,
+                DryRun: request.DryRun));
             try
             {
                 var validation = await authorityValidator
@@ -75,20 +143,22 @@ public sealed class CleanupService
                     .ConfigureAwait(false);
                 if (!validation.IsValid)
                 {
-                    results.Add(new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, validation.Error!));
+                    RecordResult(new CleanupCandidateResult(candidate, CleanupOutcome.Skipped, validation.Error!));
                     continue;
                 }
 
                 if (request.DryRun)
                 {
-                    results.Add(new CleanupCandidateResult(
-                        candidate,
-                        CleanupOutcome.Skipped,
-                        "Validated; dry run did not delete the candidate."));
+                    RecordResult(
+                        new CleanupCandidateResult(
+                            candidate,
+                            CleanupOutcome.Skipped,
+                            "Validated; dry run did not delete the candidate."),
+                        validated: true);
                     continue;
                 }
 
-                results.Add(await quarantineCleanup.ExecuteAsync(
+                RecordResult(await quarantineCleanup.ExecuteAsync(
                     candidate,
                     validation,
                     request.RuleCatalog,
@@ -96,7 +166,7 @@ public sealed class CleanupService
             }
             catch (CleanupMutationInterruptedException exception)
             {
-                results.Add(exception.Result);
+                RecordResult(exception.Result);
                 interrupted = true;
                 break;
             }
@@ -111,7 +181,7 @@ public sealed class CleanupService
                 GitCommandException or
                 ArgumentException)
             {
-                results.Add(new CleanupCandidateResult(candidate, CleanupOutcome.Failed, exception.Message));
+                RecordResult(new CleanupCandidateResult(candidate, CleanupOutcome.Failed, exception.Message));
             }
         }
 
@@ -121,6 +191,22 @@ public sealed class CleanupService
             interrupted,
             request.Candidates.Count);
     }
+
+    private void ReportProgress(OperationProgressEvent progressEvent)
+    {
+        try
+        {
+            progress.Report(progressEvent);
+        }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+        }
+    }
+
+    private static bool IsRecoverableProgressException(Exception exception) =>
+        exception is not OutOfMemoryException
+        and not StackOverflowException
+        and not AccessViolationException;
 
     private static StringComparer PathComparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;

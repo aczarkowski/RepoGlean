@@ -593,8 +593,10 @@ public static class RepoGleanApp
         output.WriteLine("  repoglean help | --help | version | --version");
         output.WriteLine();
         output.WriteLine("Scan options: --repo name --category value --exclude path --min-size size");
-        output.WriteLine("              --all-drives --details --format table|json");
+        output.WriteLine("              --all-drives --format table|json");
+        output.WriteLine("Scan report:  --details (include candidate rows in the final scan report)");
         output.WriteLine("Clean options: --dry-run --yes --all (unattended --yes also requires a scope)");
-        output.WriteLine("Console:      --quiet --verbose --no-color --no-progress");
+        output.WriteLine("Console:      --quiet --no-color");
+        output.WriteLine("Progress:     --verbose (milestones) --no-progress (disable animation)");
     }
 }

@@ -74,16 +74,16 @@ Options outside the listed commands are usage errors with exit code 2.
 | `--exclude path-or-glob` | `scan`, `clean` | Add a root-relative path, absolute path, or repository-relative glob exclusion; repeatable. |
 | `--min-size size` | `scan`, `clean` | Require an estimated minimum size such as `500MB` or `2GiB`. |
 | `--all-drives` | `scan`, `clean` | Add accessible fixed-drive roots to the requested roots. |
-| `--details` | `scan` | Print candidate rows. |
+| `--details` | `scan` | Include candidate rows in the final scan report. |
 | `--dry-run` | `clean` | Validate and report selected candidates without deletion or prompts. |
 | `--yes` | `clean` | Run unattended; requires an explicit `--all`, `--repo`, or `--category` scope. |
 | `--all` | `clean` | Include dependency artifacts as well as normally preselected categories. |
 | `--format value` | `scan`, `clean`, `rules list` | Select `table` or the versioned `json` document. |
 | `--config path` | `scan`, `clean`, `rules list`, `config path`, `config show`, `config validate` | Resolve or load an explicit configuration path. |
-| `--quiet` | `scan`, `clean` | Suppress detail and diagnostic sections while keeping the summary. |
-| `--verbose` | `scan`, `clean` | Include candidate or diagnostic detail rows in human output. |
+| `--quiet` | `scan`, `clean` | Suppress progress, narration, and detailed report sections while retaining the summary and genuine errors. |
+| `--verbose` | `scan`, `clean` | Narrate meaningful operation stages on stderr and include detailed final diagnostics. |
 | `--no-color` | `scan`, `clean` | Disable ANSI styling; redirected and JSON output are never colored. |
-| `--no-progress` | `scan`, `clean` | Suppress interactive stderr progress messages. |
+| `--no-progress` | `scan`, `clean` | Disable automatic interactive animation; explicit verbose milestones remain enabled. |
 | `--help` | Standalone, or with a complete command and no other options | Show global help instead of running the command. |
 | `--version` | Standalone, or with a complete command and no other options | Show the version instead of running the command. |
 
@@ -92,8 +92,20 @@ JSON cleanup is non-interactive by contract: `clean --format json` requires `--d
 ### Examples
 
 ```console
-# Inspect all detected candidates below the current directory.
+# Inspect all detected candidates below the current directory in the final report.
 repoglean scan . --details
+
+# Show compact progress while scanning in an interactive terminal.
+repoglean scan ~/src
+
+# Capture explicit append-only narration while keeping the human report on screen.
+repoglean scan ~/src --verbose 2> scan.log
+
+# Pipe the report while compact progress remains visible on the terminal's stderr.
+repoglean scan ~/src | less
+
+# Keep one JSON document on stdout and plain append-only diagnostics in scan.log.
+repoglean scan ~/src --verbose --format json > report.json 2> scan.log
 
 # Produce a JSON report for CI or another program.
 repoglean scan ~/src --format json --no-progress
@@ -177,7 +189,22 @@ Deletion is permanent: RepoGlean does not use the recycle bin/trash and has no u
 
 ## Output and automation contract
 
-Human reports go to stdout; interactive progress goes to stderr. `--no-progress` suppresses progress, and JSON mode suppresses it automatically so stdout contains one JSON document and no banners. JSON integer fields are byte/file/count values, `schemaVersion` is currently `1`, and the stable top-level fields are:
+Human reports and machine-readable data go to stdout. Compact progress and verbose narration use stderr exclusively. RepoGlean selects exactly one progress renderer for the complete operation:
+
+| Conditions | Renderer |
+| --- | --- |
+| `--quiet` | No progress or narration. |
+| `--verbose` without `--quiet` | Plain append-only milestones, including with redirected stderr, JSON, or `--no-progress`. |
+| Table output with interactive stderr and none of `--quiet`, `--verbose`, or `--no-progress` | Compact animated status. |
+| Redirected or captured stderr without `--verbose` | No progress. |
+| JSON without `--verbose` | No progress. |
+| `--no-progress` without `--verbose` | No progress. |
+
+Interactivity is determined by stderr, not stdout. Piping or redirecting stdout while stderr remains attached to a terminal therefore keeps compact progress visible without contaminating the pipe. `--no-progress` disables only automatic interactive animation, while `--verbose --no-progress` retains explicit milestones. `--quiet` takes precedence over both flags and suppresses animation and narration while retaining the final summary and genuine errors. `--no-color` does not affect progress because progress output uses no colour.
+
+Normal redirected execution is silent on stderr unless RepoGlean has a genuine warning or error to report. `--verbose` opts into a stable redirected execution log: `repoglean scan ~/src --verbose --format json > report.json 2> scan.log` leaves exactly one JSON document on stdout, and `scan.log` contains plain, newline-terminated, append-only diagnostics without animation or terminal control sequences.
+
+JSON integer fields are byte/file/count values, `schemaVersion` is currently `1`, and the stable top-level fields are:
 
 - `schemaVersion`, `operation`, and `status` (`success`, `partial`, `failed`, or `interrupted`);
 - `effectiveRoots`, `repositories`, `totals`, `warnings`, and `errors`;

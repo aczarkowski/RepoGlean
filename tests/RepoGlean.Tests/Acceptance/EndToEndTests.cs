@@ -163,6 +163,53 @@ public sealed class EndToEndTests
     }
 
     [Fact]
+    public async Task Built_executable_verbose_json_keeps_one_document_on_stdout_and_plain_milestones_on_stderr()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"), 47);
+
+        var verboseJson = await RunExecutableAsync(
+            ["scan", repository.Path, "--verbose", "--format", "json"]);
+
+        Assert.Equal(0, verboseJson.ExitCode);
+        using var document = JsonDocument.Parse(verboseJson.Stdout);
+        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("scan", document.RootElement.GetProperty("operation").GetString());
+        Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(repository.Path, document.RootElement.GetProperty("effectiveRoots")[0].GetString());
+        Assert.Equal(1, document.RootElement.GetProperty("totals").GetProperty("repositoryCount").GetInt64());
+        Assert.Equal(1, document.RootElement.GetProperty("totals").GetProperty("candidateCount").GetInt64());
+        Assert.Contains("Discovering repositories under", verboseJson.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Found 1 repository.", verboseJson.Stderr, StringComparison.Ordinal);
+        Assert.Contains($"Scanning [1/1] {repository.Path}...", verboseJson.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Found 1 candidate in repo", verboseJson.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Scan complete: 1 repository, 1 candidate, 0 warnings.", verboseJson.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r", verboseJson.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b", verboseJson.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Built_executable_verbose_json_dry_run_reports_validated_and_never_claims_an_artifact_was_deleted()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"), 53);
+
+        var verboseDryRun = await RunExecutableAsync(
+            ["clean", repository.Path, "--dry-run", "--verbose", "--format", "json"]);
+
+        Assert.Equal(0, verboseDryRun.ExitCode);
+        using var document = JsonDocument.Parse(verboseDryRun.Stdout);
+        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("clean", document.RootElement.GetProperty("operation").GetString());
+        Assert.True(document.RootElement.GetProperty("cleanup").GetProperty("dryRun").GetBoolean());
+        Assert.Contains("Validated repo/obj", verboseDryRun.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            verboseDryRun.Stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            line => line.StartsWith("Deleted ", StringComparison.Ordinal));
+        Assert.True(File.Exists(repository.GetPath("obj/artifact.bin")));
+    }
+
+    [Fact]
     public async Task Portable_pre_cancelled_json_operation_returns_130_without_console_noise()
     {
         using var temporary = new TemporaryDirectory();
@@ -216,6 +263,8 @@ public sealed class EndToEndTests
 
         Assert.Equal(0, executableHelp.ExitCode);
         Assert.Contains("--config", executableHelp.Stdout, StringComparison.Ordinal);
+        Assert.Contains("--details", executableHelp.Stdout, StringComparison.Ordinal);
+        Assert.Contains("--verbose", executableHelp.Stdout, StringComparison.Ordinal);
         Assert.Contains("--no-progress", executableHelp.Stdout, StringComparison.Ordinal);
         Assert.True(File.Exists(readmePath), "README.md must document the supported RepoGlean surface.");
         Assert.True(File.Exists(schemaPath), "The configuration JSON Schema must be published.");
@@ -232,6 +281,9 @@ public sealed class EndToEndTests
         Assert.Contains("STATX_MNT_ID", readme, StringComparison.Ordinal);
         Assert.Contains("Ubuntu 24.04", readme, StringComparison.Ordinal);
         Assert.Contains("ext4", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("narrat", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stderr", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--verbose --format json", readme, StringComparison.Ordinal);
 
         var smoke = await File.ReadAllTextAsync(smokePath);
         Assert.Contains("ConvertFrom-Json", smoke, StringComparison.Ordinal);

@@ -16,7 +16,7 @@ public sealed class ReadOnlyCommandTests
         Assert.Contains("Usage:", help.Stdout);
         Assert.Equal(string.Empty, help.Stderr);
         Assert.Equal(0, version.ExitCode);
-        Assert.Equal("repoglean 2.0.0", version.Stdout.Trim());
+        Assert.Equal("repoglean 2.1.0", version.Stdout.Trim());
     }
 
     [Fact]

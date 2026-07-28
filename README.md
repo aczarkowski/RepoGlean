@@ -2,7 +2,7 @@
 
 RepoGlean is a stateless, cross-platform command-line tool that finds regenerable development artifacts in Git working trees, reports their estimated logical size, and can permanently remove an explicitly selected set. Git is the authority: an item is eligible only when it is ignored by Git and matches an active built-in or custom rule. Unknown ignored content is never selected.
 
-RepoGlean 2.0.0 is a .NET 10 Native AOT executable for Windows, macOS, and Linux. It does not require a .NET runtime, but it does require the `git` executable on `PATH`.
+RepoGlean 2.1.0 is a .NET 10 Native AOT executable for Windows, macOS, and Linux. It does not require a .NET runtime, but it does require the `git` executable on `PATH`.
 
 ## Install
 
@@ -39,7 +39,7 @@ Confirm both prerequisites:
 ```console
 $ git --version
 $ repoglean --version
-repoglean 2.0.0
+repoglean 2.1.0
 ```
 
 Release archives contain the single self-contained executable, this README, and the MIT `LICENSE`.
@@ -222,7 +222,7 @@ Cleanup candidates add `outcome`, `message`, and `deletionCompleted`; the cleanu
 
 Reported sizes are estimates: RepoGlean sums logical file lengths, saturating at the maximum signed 64-bit integer. They are not filesystem block usage or promised reclaimed capacity, and may differ because of sparse files, compression, clones, hard links, metadata, or concurrent change. `estimatedDeletedBytes` counts candidates whose payload deletion completed, independently of later quarantine-cleanup status.
 
-## Deferred beyond 2.0.0
+## Deferred beyond 2.1.0
 
 V1 does not provide a GUI, daemon/scheduler, trash/undo, automatic package-manager cleanup, remote-host cleanup, arbitrary deletion rules outside Git repositories, physical disk-allocation accounting, or protection from a malicious same-user filesystem racer. Use an external scheduler around explicit scoped commands if required; keep the same exit-code and JSON checks.
 

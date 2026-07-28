@@ -333,7 +333,7 @@ public static class RepoGleanApp
             .Where(candidate => includeOptIn || candidate.Preselected)
             .ToArray());
 
-    private static OperationProgressEvent CreateCleanupTerminalEvent(
+    internal static OperationProgressEvent CreateCleanupTerminalEvent(
         ProgressEventKind kind,
         CleanupResult cleanup,
         ReportDocument report)
@@ -344,8 +344,7 @@ public static class RepoGleanApp
             item.Outcome == CleanupOutcome.Skipped &&
             !IsValidatedDryRun(cleanup, item));
         var failedCount = cleanup.Items.LongCount(item =>
-            item.Outcome == CleanupOutcome.Failed &&
-            !item.DeletionCompleted);
+            item.Outcome == CleanupOutcome.Failed);
         var processedEstimatedBytes = cleanup.Items
             .Where(item => item.DeletionCompleted || IsValidatedDryRun(cleanup, item))
             .Aggregate(

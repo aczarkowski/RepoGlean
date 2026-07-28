@@ -36,7 +36,7 @@ public sealed class InteractiveProgressRendererTests
     }
 
     [Fact]
-    public async Task Pause_clears_the_previous_line_suppresses_writes_and_resume_renders_latest_state()
+    public async Task Resume_waits_for_the_next_event_then_renders_that_state_synchronously()
     {
         using var writer = new LockedStringWriter();
         var ticker = new ManualProgressTicker();
@@ -61,8 +61,19 @@ public sealed class InteractiveProgressRendererTests
         Assert.Equal(pausedOutput, writer.Snapshot);
 
         renderer.Resume();
+        Assert.Equal(pausedOutput, writer.Snapshot);
+        ticker.Tick();
+        await Task.Yield();
+        Assert.Equal(pausedOutput, writer.Snapshot);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.CandidateStarted,
+            ProgressOperation.Clean,
+            Path: "/work/my-api/obj",
+            Current: 1,
+            Total: 2));
         Assert.EndsWith(
-            "\r⠋ Discovering repositories • 12 found • my-api",
+            "\r⠋ Cleaning artifacts 1/2 • 0 deleted • 0 B estimated • obj",
             writer.Snapshot,
             StringComparison.Ordinal);
     }

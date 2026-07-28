@@ -40,6 +40,7 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
     private int previousRenderedWidth;
     private bool rendered;
     private bool paused;
+    private bool awaitingReportAfterResume;
     private bool disabled;
     private bool writerDisabled;
     private bool disposed;
@@ -68,6 +69,11 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
             if (disposed) return;
 
             snapshot = snapshot.Apply(progressEvent);
+            if (awaitingReportAfterResume)
+            {
+                awaitingReportAfterResume = false;
+            }
+
             if (rendered || paused || disabled) return;
 
             rendered = Render();
@@ -82,6 +88,8 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
 
             paused = true;
             Clear();
+            rendered = false;
+            awaitingReportAfterResume = false;
         }
     }
 
@@ -92,10 +100,7 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
             if (disposed || !paused) return;
 
             paused = false;
-            if (!disabled)
-            {
-                rendered = Render() || rendered;
-            }
+            awaitingReportAfterResume = true;
         }
     }
 
@@ -120,7 +125,7 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
             {
                 lock (sync)
                 {
-                    if (disposed || paused || disabled) continue;
+                    if (disposed || paused || awaitingReportAfterResume || disabled) continue;
 
                     if (rendered)
                     {

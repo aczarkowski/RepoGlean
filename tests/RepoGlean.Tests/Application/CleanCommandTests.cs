@@ -1,4 +1,9 @@
 using System.Text.Json;
+using RepoGlean.Cleaning;
+using RepoGlean.Cli;
+using RepoGlean.Output;
+using RepoGlean.Progress;
+using RepoGlean.Scanning;
 using RepoGlean.Tests.Support;
 
 namespace RepoGlean.Tests.Application;
@@ -179,11 +184,20 @@ public sealed class CleanCommandTests
         AssertProgressIsClearBefore(confirmed.Writes, "Repositories:");
         AssertProgressIsClearBefore(confirmed.Writes, "Artifacts:");
         var confirmationIndex = AssertProgressIsClearBefore(confirmed.Writes, "Type delete");
-        Assert.Contains(
-            confirmed.Writes.Skip(confirmationIndex + 1),
+        var firstPostConfirmationProgress = confirmed.Writes
+            .Skip(confirmationIndex + 1)
+            .First(
             write => write.Stream == "stderr" &&
                      write.Text.StartsWith('\r') &&
                      !IsClearWrite(write.Text));
+        Assert.Contains(
+            "Cleaning artifacts",
+            firstPostConfirmationProgress.Text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Scanning repositories",
+            firstPostConfirmationProgress.Text,
+            StringComparison.Ordinal);
 
         var cancelledRepository = await CreateRepositoryAsync(temporary.GetPath("cancelled"));
         var cancelled = await RunOrderedAsync(
@@ -278,6 +292,50 @@ public sealed class CleanCommandTests
             "Cleanup: 0 deleted, 0 skipped, 1 failed | 1 selected, 1 processed",
             result.Stdout,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Cleanup_terminal_event_counts_post_deletion_failure_as_deleted_and_failed()
+    {
+        var identity = new FileSystemIdentity(
+            1,
+            2,
+            "mount",
+            FileAttributes.Directory,
+            LinkTarget: null);
+        var candidate = new ArtifactCandidate(
+            "/repos/sample",
+            "/repos/sample/obj",
+            "obj",
+            "dotnet.obj",
+            ArtifactCategory.Build,
+            Preselected: true,
+            FileCount: 1,
+            EstimatedBytes: 5,
+            identity,
+            identity);
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Failed,
+                "Payload deleted; empty quarantine cleanup failed.",
+                DeletionCompleted: true)],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+        var report = ReportDocument.FromCleanup(["/repos"], cleanup);
+
+        var progressEvent = RepoGleanApp.CreateCleanupTerminalEvent(
+            ProgressEventKind.Completed,
+            cleanup,
+            report);
+
+        Assert.Equal(1, cleanup.DeletedCount);
+        Assert.Equal(1, cleanup.FailedCount);
+        Assert.Equal(1, report.Cleanup!.DeletedCount);
+        Assert.Equal(1, report.Cleanup.FailedCount);
+        Assert.Equal(1, progressEvent.DeletedCount);
+        Assert.Equal(1, progressEvent.FailedCount);
     }
 
     [Fact]

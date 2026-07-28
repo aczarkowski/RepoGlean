@@ -31,6 +31,7 @@ public sealed class CleanupServiceTests
         Assert.Equal(0, events.Completed.SkippedCount);
         Assert.Equal(0, events.Completed.FailedCount);
         Assert.Equal(candidate.EstimatedBytes, events.Completed.EstimatedBytes);
+        Assert.Equal(candidate.EstimatedBytes, events.Completed.CurrentEstimatedBytes);
     }
 
     [Fact]
@@ -55,6 +56,7 @@ public sealed class CleanupServiceTests
         Assert.Equal(0, events.Completed.SkippedCount);
         Assert.Equal(0, events.Completed.FailedCount);
         Assert.Equal(candidate.EstimatedBytes, events.Completed.EstimatedBytes);
+        Assert.Equal(candidate.EstimatedBytes, events.Completed.CurrentEstimatedBytes);
     }
 
     [Fact]
@@ -76,6 +78,7 @@ public sealed class CleanupServiceTests
         Assert.Equal(1, events.Completed.SkippedCount);
         Assert.Equal(0, events.Completed.FailedCount);
         Assert.Equal(0, events.Completed.EstimatedBytes);
+        Assert.Equal(0, events.Completed.CurrentEstimatedBytes);
     }
 
     [Fact]
@@ -101,6 +104,7 @@ public sealed class CleanupServiceTests
         Assert.Equal(0, events.Completed.SkippedCount);
         Assert.Equal(1, events.Completed.FailedCount);
         Assert.Equal(0, events.Completed.EstimatedBytes);
+        Assert.Equal(0, events.Completed.CurrentEstimatedBytes);
     }
 
     [Fact]

@@ -102,6 +102,32 @@ public sealed class InteractiveProgressRendererTests
         Assert.DoesNotContain("a-very-long-repository-name", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Report_truncates_optional_path_with_ellipsis_to_exact_terminal_width()
+    {
+        const string fixedContent = "⠋ Scanning repositories 1/2 • 3 candidates • 4 KiB estimated";
+        const int visiblePathWidth = 8;
+        var terminalWidth = fixedContent.Length + " • ".Length + visiblePathWidth;
+        using var writer = new LockedStringWriter();
+        var ticker = new ManualProgressTicker();
+        await using var renderer = new InteractiveProgressRenderer(writer, () => terminalWidth, ticker);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanStarted,
+            ProgressOperation.Scan,
+            Path: "/work/a-very-long-repository-name",
+            Current: 1,
+            Total: 2,
+            CandidateCount: 3,
+            EstimatedBytes: 4 * 1024));
+
+        var renderedLine = writer.Snapshot[(writer.Snapshot.LastIndexOf('\r') + 1)..];
+        Assert.StartsWith(fixedContent + " • ", renderedLine, StringComparison.Ordinal);
+        Assert.EndsWith("…", renderedLine, StringComparison.Ordinal);
+        Assert.DoesNotContain("a-very-long-repository-name", renderedLine, StringComparison.Ordinal);
+        Assert.Equal(terminalWidth, renderedLine.Length);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -448,14 +448,15 @@ public static class RepoGleanApp
         TextWriter stderr,
         CancellationToken cancellationToken)
     {
-        await using var progress = ProgressReporterFactory.Create(
-            runtime.IsErrorInteractive,
-            options.OutputFormat,
-            options.Quiet,
-            options.Verbose,
-            options.NoProgress,
-            stderr,
-            runtime.ErrorWidthProvider ?? (() => null));
+        await using var progress = new OperationProgressTracker(
+            ProgressReporterFactory.Create(
+                runtime.IsErrorInteractive,
+                options.OutputFormat,
+                options.Quiet,
+                options.Verbose,
+                options.NoProgress,
+                stderr,
+                runtime.ErrorWidthProvider ?? (() => null)));
         try
         {
             var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
@@ -479,6 +480,7 @@ public static class RepoGleanApp
             }
 
             var report = ReportDocument.FromScan(discovery.EffectiveRoots ?? roots, result);
+            cancellationToken.ThrowIfCancellationRequested();
             ReportProgress(
                 progress,
                 new OperationProgressEvent(
@@ -491,7 +493,7 @@ public static class RepoGleanApp
             PauseProgress(progress);
             if (options.OutputFormat == OutputFormat.Json)
             {
-                await JsonReportWriter.WriteAsync(report, stdout, cancellationToken).ConfigureAwait(false);
+                await JsonReportWriter.WriteAsync(report, stdout, CancellationToken.None).ConfigureAwait(false);
             }
             else
             {
@@ -511,9 +513,7 @@ public static class RepoGleanApp
         {
             ReportProgress(
                 progress,
-                new OperationProgressEvent(
-                    ProgressEventKind.Interrupted,
-                    ProgressOperation.Scan));
+                progress.CreateScanInterruptedEvent());
             PauseProgress(progress);
             throw;
         }

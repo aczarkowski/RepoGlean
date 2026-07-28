@@ -225,8 +225,8 @@ public sealed class CleanCommandTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("Validating [1/2]", result.Stderr, StringComparison.Ordinal);
-        Assert.Contains("Validated repo/obj", result.Stderr, StringComparison.Ordinal);
-        Assert.Contains("Validated repo/node_modules", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Validated repo/obj (5 B estimated).", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Validated repo/node_modules (7 B estimated).", result.Stderr, StringComparison.Ordinal);
         Assert.DoesNotContain("Deleted", result.Stderr, StringComparison.Ordinal);
         Assert.Contains(
             "Cleanup complete: 0 deleted, 2 validated, 0 skipped, 0 failed, 0 warnings.",

@@ -300,6 +300,70 @@ public sealed class ReadOnlyCommandTests
     }
 
     [Fact]
+    public async Task Verbose_scan_interruption_after_one_repository_keeps_factual_monotonic_totals()
+    {
+        using var temporary = new TemporaryDirectory();
+        var first = await CreateRepositoryAsync(temporary.GetPath("first"), 5);
+        _ = await CreateRepositoryAsync(temporary.GetPath("second"), 7);
+        var missingRoot = temporary.GetPath("missing");
+        using var cancellation = new CancellationTokenSource();
+        using var input = new StringReader(string.Empty);
+        using var stdout = new StringWriter();
+        using var stderr = new CancellingVerboseWriter(
+            cancellation,
+            line => line.StartsWith(
+                $"Found 1 candidate in {Path.GetFileName(first.Path)} ",
+                StringComparison.Ordinal));
+        var runtime = new AppRuntime("git", Path.GetTempPath(), IsErrorInteractive: false);
+
+        var exitCode = await RepoGleanApp.RunAsync(
+            ["scan", temporary.Path, missingRoot, "--verbose", "--format", "json"],
+            input,
+            stdout,
+            stderr,
+            runtime,
+            cancellation.Token);
+
+        Assert.Equal(130, exitCode);
+        Assert.Contains(
+            "Scan interrupted: 1 repository, 1 candidate, 1 warning.",
+            stderr.ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Scan complete:", stderr.ToString(), StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(stdout.ToString());
+        Assert.Equal("interrupted", document.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Json_scan_cancellation_after_completed_terminal_event_keeps_only_completed_and_valid_json()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"), 5);
+        using var cancellation = new CancellationTokenSource();
+        using var input = new StringReader(string.Empty);
+        using var stdout = new StringWriter();
+        using var stderr = new CancellingVerboseWriter(
+            cancellation,
+            line => line.StartsWith("Scan complete:", StringComparison.Ordinal));
+        var runtime = new AppRuntime("git", Path.GetTempPath(), IsErrorInteractive: false);
+
+        var exitCode = await RepoGleanApp.RunAsync(
+            ["scan", repository.Path, "--verbose", "--format", "json"],
+            input,
+            stdout,
+            stderr,
+            runtime,
+            cancellation.Token);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, CountOccurrences(stderr.ToString(), "Scan complete:"));
+        Assert.DoesNotContain("Scan interrupted:", stderr.ToString(), StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(stdout.ToString());
+        Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(1, document.RootElement.GetProperty("totals").GetProperty("candidateCount").GetInt64());
+    }
+
+    [Fact]
     public async Task Public_RunAsync_never_colors_a_custom_stdout_even_when_the_process_console_is_interactive()
     {
         using var temporary = new TemporaryDirectory();
@@ -400,6 +464,19 @@ public sealed class ReadOnlyCommandTests
         }
     }
 
+    private static int CountOccurrences(string value, string expected)
+    {
+        var count = 0;
+        var position = 0;
+        while ((position = value.IndexOf(expected, position, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            position += expected.Length;
+        }
+
+        return count;
+    }
+
     private sealed class ProgressThrowingWriter : StringWriter
     {
         public int ProgressWriteAttempts { get; private set; }
@@ -416,12 +493,16 @@ public sealed class ReadOnlyCommandTests
         }
     }
 
-    private sealed class CancellingVerboseWriter(CancellationTokenSource cancellation) : StringWriter
+    private sealed class CancellingVerboseWriter(
+        CancellationTokenSource cancellation,
+        Func<string, bool>? shouldCancel = null) : StringWriter
     {
         public override void WriteLine(string? value)
         {
             base.WriteLine(value);
-            if (value?.StartsWith("Discovering repositories under", StringComparison.Ordinal) == true)
+            if (value is not null &&
+                (shouldCancel?.Invoke(value) ??
+                 value.StartsWith("Discovering repositories under", StringComparison.Ordinal)))
             {
                 cancellation.Cancel();
             }

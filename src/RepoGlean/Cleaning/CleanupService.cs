@@ -112,6 +112,10 @@ public sealed class CleanupService
                 SkippedCount: skippedCount,
                 FailedCount: failedCount,
                 EstimatedBytes: processedEstimatedBytes,
+                CurrentEstimatedBytes: outcome is ProgressCandidateOutcome.Deleted
+                    or ProgressCandidateOutcome.Validated
+                        ? result.Candidate.EstimatedBytes
+                        : 0,
                 DryRun: request.DryRun,
                 Outcome: outcome));
         }

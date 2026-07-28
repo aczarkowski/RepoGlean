@@ -95,30 +95,32 @@ public sealed class VerboseProgressRendererTests
         renderer.Report(new OperationProgressEvent(
             ProgressEventKind.DiscoveryStarted,
             ProgressOperation.Scan,
-            Roots: ["/work\r\n\u001b[31mred"]));
+            Roots: ["/work\0\u0007\b\t\r\n\u001b\u007f\u009b[31mżółć🙂"]));
         renderer.Report(new OperationProgressEvent(
             ProgressEventKind.RepositoryScanStarted,
             ProgressOperation.Scan,
-            Path: "/work/my\r\n\u001b[31m-api",
+            Path: "/work/my\0\u0007\b\t\r\n\u001b\u007f\u009b[31m-api-żółć🙂",
             Current: 1,
             Total: 1));
         renderer.Report(new OperationProgressEvent(
             ProgressEventKind.Warning,
             ProgressOperation.Scan,
-            Path: "/work/unreadable\r\n\u001b[31m",
-            Message: "Unable to inspect\r\n\u001b[31m path."));
+            Path: "/work/unreadable\0\u0007\b\t\r\n\u001b\u007f\u009b[31m-żółć🙂",
+            Message: "Unable to inspect\0\u0007\b\t\r\n\u001b\u007f\u009b[31m path."));
         renderer.Report(new OperationProgressEvent(
             ProgressEventKind.Failed,
             ProgressOperation.Scan,
-            Message: "Git\r\n\u001b[31m failed."));
+            Message: "Git\0\u0007\b\t\r\n\u001b\u007f\u009b[31m failed-żółć🙂."));
 
         var output = writer.ToString();
-        Assert.Contains("/work[31mred", output, StringComparison.Ordinal);
-        Assert.Contains("/work/my[31m-api", output, StringComparison.Ordinal);
-        Assert.Contains("Warning: /work/unreadable[31m: Unable to inspect[31m path.", output, StringComparison.Ordinal);
-        Assert.Contains("Scan failed: Git[31m failed.", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("\r", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("\u001b", output, StringComparison.Ordinal);
+        Assert.Contains("/work[31mżółć🙂", output, StringComparison.Ordinal);
+        Assert.Contains("/work/my[31m-api-żółć🙂", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "Warning: /work/unreadable[31m-żółć🙂: Unable to inspect[31m path.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains("Scan failed: Git[31m failed-żółć🙂.", output, StringComparison.Ordinal);
+        Assert.All(output.Where(char.IsControl), character => Assert.Equal('\n', character));
         Assert.Equal(4, output.Count(character => character == '\n'));
     }
 

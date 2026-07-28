@@ -18,10 +18,10 @@ internal static class ProgressText
         return string.IsNullOrWhiteSpace(name) ? sanitized : name;
     }
 
-    public static string Sanitize(string? value) => value?
-        .Replace("\r", string.Empty, StringComparison.Ordinal)
-        .Replace("\n", string.Empty, StringComparison.Ordinal)
-        .Replace("\u001b", string.Empty, StringComparison.Ordinal) ?? string.Empty;
+    public static string Sanitize(string? value) =>
+        string.IsNullOrEmpty(value)
+            ? string.Empty
+            : string.Concat(value.Where(static character => !char.IsControl(character)));
 
     public static string Plural(long count, string singular, string plural) =>
         count == 1 ? singular : plural;

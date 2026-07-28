@@ -98,7 +98,7 @@ public sealed class ReadOnlyCommandTests
         Assert.Equal(0, detailed.ExitCode);
         Assert.Contains("dotnet.obj", detailed.Stdout);
         Assert.DoesNotContain("\u001b[", detailed.Stdout, StringComparison.Ordinal);
-        Assert.Equal(string.Empty, detailed.Stderr);
+        Assert.Contains("Discovering repositories", detailed.Stderr, StringComparison.Ordinal);
         Assert.Equal(0, quiet.ExitCode);
         Assert.Contains("Total", quiet.Stdout);
         Assert.DoesNotContain("dotnet.obj", quiet.Stdout);
@@ -191,21 +191,112 @@ public sealed class ReadOnlyCommandTests
     }
 
     [Fact]
-    public async Task Progress_uses_stderr_only_when_interactive_and_is_disabled_explicitly_or_for_json()
+    public async Task Scan_progress_selection_preserves_stdout_and_flag_precedence()
     {
         using var temporary = new TemporaryDirectory();
         var repository = await CreateRepositoryAsync(temporary.GetPath("repo"), 5);
 
         var interactive = await RunAsync(["scan", repository.Path], isErrorInteractive: true);
-        var disabled = await RunAsync(["scan", repository.Path, "--no-progress"], isErrorInteractive: true);
-        var json = await RunAsync(["scan", repository.Path, "--format", "json"], isErrorInteractive: true);
+        var redirected = await RunAsync(["scan", repository.Path], isErrorInteractive: false);
+        var verboseRedirected = await RunAsync(
+            ["scan", repository.Path, "--verbose"],
+            isErrorInteractive: false);
+        var verboseJson = await RunAsync(
+            ["scan", repository.Path, "--verbose", "--format", "json"],
+            isErrorInteractive: false);
+        var verboseNoProgress = await RunAsync(
+            ["scan", repository.Path, "--verbose", "--no-progress"],
+            isErrorInteractive: false);
+        var quietVerbose = await RunAsync(
+            ["scan", repository.Path, "--quiet", "--verbose"],
+            isErrorInteractive: true);
 
-        Assert.Contains("Scanning", interactive.Stderr);
-        Assert.DoesNotContain("Scanning", interactive.Stdout);
-        Assert.DoesNotContain("\u001b[", interactive.Stdout, StringComparison.Ordinal);
-        Assert.Equal(string.Empty, disabled.Stderr);
-        Assert.Equal(string.Empty, json.Stderr);
-        JsonDocument.Parse(json.Stdout).Dispose();
+        Assert.Equal(0, interactive.ExitCode);
+        Assert.Contains("Discovering repositories", interactive.Stderr, StringComparison.Ordinal);
+        Assert.Contains("\r", interactive.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Roots:", interactive.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Discovering repositories", interactive.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b", interactive.Stdout, StringComparison.Ordinal);
+
+        Assert.Equal(0, redirected.ExitCode);
+        Assert.Equal(string.Empty, redirected.Stderr);
+
+        Assert.Equal(0, verboseRedirected.ExitCode);
+        AssertContainsInOrder(
+            verboseRedirected.Stderr,
+            "Discovering repositories under",
+            $"Scanning [1/1] {repository.Path}...",
+            "Scan complete: 1 repository, 1 candidate, 0 warnings.");
+        Assert.DoesNotContain("\r", verboseRedirected.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b", verboseRedirected.Stderr, StringComparison.Ordinal);
+
+        Assert.Equal(0, verboseJson.ExitCode);
+        using (var document = JsonDocument.Parse(verboseJson.Stdout))
+        {
+            Assert.Equal("scan", document.RootElement.GetProperty("operation").GetString());
+        }
+
+        Assert.Contains("Discovering repositories under", verboseJson.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Scan complete:", verboseJson.Stderr, StringComparison.Ordinal);
+
+        Assert.Equal(0, verboseNoProgress.ExitCode);
+        Assert.Contains("Discovering repositories under", verboseNoProgress.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Scan complete:", verboseNoProgress.Stderr, StringComparison.Ordinal);
+
+        Assert.Equal(0, quietVerbose.ExitCode);
+        Assert.Equal(string.Empty, quietVerbose.Stderr);
+        Assert.StartsWith("Total ", quietVerbose.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Roots:", quietVerbose.Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Scan_progress_write_failures_do_not_change_the_report_or_exit_code()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"), 5);
+        using var input = new StringReader(string.Empty);
+        using var stdout = new StringWriter();
+        using var stderr = new ProgressThrowingWriter();
+        var runtime = new AppRuntime("git", Path.GetTempPath(), IsErrorInteractive: true);
+
+        var exitCode = await RepoGleanApp.RunAsync(
+            ["scan", repository.Path],
+            input,
+            stdout,
+            stderr,
+            runtime,
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, stderr.ProgressWriteAttempts);
+        Assert.Contains("Total 5 B estimated", stdout.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Verbose_scan_interruption_reports_a_milestone_before_the_existing_diagnostic()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"), 5);
+        using var cancellation = new CancellationTokenSource();
+        using var input = new StringReader(string.Empty);
+        using var stdout = new StringWriter();
+        using var stderr = new CancellingVerboseWriter(cancellation);
+        var runtime = new AppRuntime("git", Path.GetTempPath(), IsErrorInteractive: false);
+
+        var exitCode = await RepoGleanApp.RunAsync(
+            ["scan", repository.Path, "--verbose"],
+            input,
+            stdout,
+            stderr,
+            runtime,
+            cancellation.Token);
+
+        Assert.Equal(130, exitCode);
+        AssertContainsInOrder(
+            stderr.ToString(),
+            "Discovering repositories under",
+            "Scan interrupted:",
+            "Operation interrupted.");
     }
 
     [Fact]
@@ -244,6 +335,9 @@ public sealed class ReadOnlyCommandTests
         var missingRoot = temporary.GetPath("missing");
 
         var missingGit = await RunAsync(["scan", empty.Path], gitExecutable: "repoglean-missing-git");
+        var verboseMissingGit = await RunAsync(
+            ["scan", empty.Path, "--verbose"],
+            gitExecutable: "repoglean-missing-git");
         var noCandidates = await RunAsync(["scan", empty.Path]);
         var partial = await RunAsync(["scan", empty.Path, missingRoot, "--format", "json"]);
         var usage = await RunAsync(["scan", "--unknown"]);
@@ -253,6 +347,11 @@ public sealed class ReadOnlyCommandTests
 
         Assert.Equal(1, missingGit.ExitCode);
         Assert.Contains("Git executable", missingGit.Stderr);
+        Assert.Equal(1, verboseMissingGit.ExitCode);
+        AssertContainsInOrder(
+            verboseMissingGit.Stderr,
+            "Scan failed: Git executable",
+            "Error: Git executable");
         Assert.Equal(0, noCandidates.ExitCode);
         Assert.Contains("No candidates", noCandidates.Stdout);
         Assert.Equal(3, partial.ExitCode);
@@ -287,6 +386,47 @@ public sealed class ReadOnlyCommandTests
     }
 
     private sealed record AppResult(int ExitCode, string Stdout, string Stderr);
+
+    private static void AssertContainsInOrder(string output, params string[] expectedValues)
+    {
+        var position = 0;
+        foreach (var expectedValue in expectedValues)
+        {
+            var next = output.IndexOf(expectedValue, position, StringComparison.Ordinal);
+            Assert.True(
+                next >= position,
+                $"Expected '{expectedValue}' after position {position} in:{Environment.NewLine}{output}");
+            position = next + expectedValue.Length;
+        }
+    }
+
+    private sealed class ProgressThrowingWriter : StringWriter
+    {
+        public int ProgressWriteAttempts { get; private set; }
+
+        public override void Write(string? value)
+        {
+            if (value?.StartsWith('\r') == true)
+            {
+                ProgressWriteAttempts++;
+                throw new IOException("Simulated progress write failure.");
+            }
+
+            base.Write(value);
+        }
+    }
+
+    private sealed class CancellingVerboseWriter(CancellationTokenSource cancellation) : StringWriter
+    {
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            if (value?.StartsWith("Discovering repositories under", StringComparison.Ordinal) == true)
+            {
+                cancellation.Cancel();
+            }
+        }
+    }
 
     private sealed class TestDriveRootProvider(string root) : IDriveRootProvider
     {

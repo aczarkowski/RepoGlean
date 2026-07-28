@@ -166,6 +166,149 @@ public sealed class CleanCommandTests
         Assert.DoesNotContain(missingRoot, quiet.Stdout, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Interactive_cleanup_clears_progress_before_prompts_and_resumes_only_after_confirmation()
+    {
+        using var temporary = new TemporaryDirectory();
+        var confirmedRepository = await CreateRepositoryAsync(temporary.GetPath("confirmed"));
+        var confirmed = await RunOrderedAsync(
+            ["clean", confirmedRepository.Path],
+            "\n\ndelete\n");
+
+        Assert.Equal(0, confirmed.Result.ExitCode);
+        AssertProgressIsClearBefore(confirmed.Writes, "Repositories:");
+        AssertProgressIsClearBefore(confirmed.Writes, "Artifacts:");
+        var confirmationIndex = AssertProgressIsClearBefore(confirmed.Writes, "Type delete");
+        Assert.Contains(
+            confirmed.Writes.Skip(confirmationIndex + 1),
+            write => write.Stream == "stderr" &&
+                     write.Text.StartsWith('\r') &&
+                     !IsClearWrite(write.Text));
+
+        var cancelledRepository = await CreateRepositoryAsync(temporary.GetPath("cancelled"));
+        var cancelled = await RunOrderedAsync(
+            ["clean", cancelledRepository.Path],
+            "\n\nno\n");
+
+        Assert.Equal(0, cancelled.Result.ExitCode);
+        var cancelledConfirmationIndex = AssertProgressIsClearBefore(cancelled.Writes, "Type delete");
+        Assert.DoesNotContain(
+            cancelled.Writes.Skip(cancelledConfirmationIndex + 1),
+            write => write.Stream == "stderr" && !IsClearWrite(write.Text));
+        Assert.Contains("Cleanup cancelled; nothing was deleted.", cancelled.Result.Stdout, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(cancelledRepository.GetPath("obj")));
+    }
+
+    [Fact]
+    public async Task Verbose_dry_run_uses_validation_terms_without_claiming_deletion()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--dry-run", "--all", "--verbose"],
+            string.Empty);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Validating [1/2]", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Validated repo/obj", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains("Validated repo/node_modules", result.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Deleted", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains(
+            "Cleanup complete: 0 deleted, 2 validated, 0 skipped, 0 failed, 0 warnings.",
+            result.Stderr,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Verbose_cleanup_reports_a_safety_skip_from_the_authoritative_result()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--verbose"],
+            "\n\ndelete\n",
+            beforeReadLine: lineNumber =>
+            {
+                if (lineNumber != 3) return;
+                Directory.Delete(repository.GetPath("obj"), recursive: true);
+                Directory.CreateDirectory(repository.GetPath("obj"));
+                File.WriteAllText(repository.GetPath("obj/replacement.bin"), "replacement");
+            });
+
+        Assert.Equal(3, result.ExitCode);
+        Assert.Contains("Skipped repo/obj.", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains(
+            "Cleanup complete: 0 deleted, 0 validated, 1 skipped, 0 failed, 1 warning.",
+            result.Stderr,
+            StringComparison.Ordinal);
+        Assert.Contains("Cleanup: 0 deleted, 1 skipped, 0 failed", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Verbose_cleanup_reports_a_candidate_failure_from_the_authoritative_result()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+        var markerPath = temporary.GetPath("fail-cleanup");
+        var gitWrapper = CreateCleanupFailureGitWrapper(
+            temporary.GetPath("git-wrapper"),
+            markerPath,
+            repository.Path);
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--verbose"],
+            "\n\ndelete\n",
+            gitExecutable: gitWrapper,
+            beforeReadLine: lineNumber =>
+            {
+                if (lineNumber == 3) File.WriteAllText(markerPath, string.Empty);
+            });
+
+        Assert.Equal(3, result.ExitCode);
+        Assert.Contains("Failed repo/obj.", result.Stderr, StringComparison.Ordinal);
+        Assert.Contains(
+            "Cleanup complete: 0 deleted, 0 validated, 0 skipped, 1 failed, 0 warnings.",
+            result.Stderr,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Cleanup: 0 deleted, 0 skipped, 1 failed | 1 selected, 1 processed",
+            result.Stdout,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Verbose_interrupted_cleanup_uses_processed_selected_and_outcome_totals()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+        using var cancellation = new CancellationTokenSource();
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--verbose"],
+            "\n\ndelete\n",
+            beforeReadLine: lineNumber =>
+            {
+                if (lineNumber == 3) cancellation.Cancel();
+            },
+            cancellationToken: cancellation.Token);
+
+        Assert.Equal(130, result.ExitCode);
+        Assert.Contains(
+            "Cleanup interrupted: 0 deleted, 0 validated, 0 skipped, 0 failed, 0 warnings.",
+            result.Stderr,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Cleanup: 0 deleted, 0 skipped, 0 failed | 1 selected, 0 processed",
+            result.Stdout,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Cleanup complete:", result.Stderr, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(repository.GetPath("obj")));
+    }
+
     private static async Task<GitTestRepository> CreateRepositoryAsync(string path)
     {
         var repository = await GitTestRepository.CreateAsync(path);
@@ -178,15 +321,188 @@ public sealed class CleanCommandTests
         return repository;
     }
 
-    private static async Task<AppResult> RunAsync(string[] arguments, string inputText, bool isErrorInteractive = false)
+    private static async Task<AppResult> RunAsync(
+        string[] arguments,
+        string inputText,
+        bool isErrorInteractive = false,
+        string gitExecutable = "git",
+        Action<int>? beforeReadLine = null,
+        CancellationToken cancellationToken = default)
     {
-        using var input = new StringReader(inputText);
+        using var input = beforeReadLine is null
+            ? new StringReader(inputText)
+            : new CallbackTextReader(inputText, beforeReadLine);
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        var runtime = new AppRuntime("git", Path.GetTempPath(), isErrorInteractive);
-        var exitCode = await RepoGleanApp.RunAsync(arguments, input, stdout, stderr, runtime, CancellationToken.None);
+        var runtime = new AppRuntime(gitExecutable, Path.GetTempPath(), isErrorInteractive);
+        var exitCode = await RepoGleanApp.RunAsync(arguments, input, stdout, stderr, runtime, cancellationToken);
         return new AppResult(exitCode, stdout.ToString(), stderr.ToString());
     }
 
+    private static async Task<OrderedAppResult> RunOrderedAsync(string[] arguments, string inputText)
+    {
+        using var input = new StringReader(inputText);
+        var ledger = new WriteLedger();
+        using var stdout = new OrderedTextWriter("stdout", ledger);
+        using var stderr = new OrderedTextWriter("stderr", ledger);
+        var runtime = new AppRuntime("git", Path.GetTempPath(), IsErrorInteractive: true);
+        var exitCode = await RepoGleanApp.RunAsync(
+            arguments,
+            input,
+            stdout,
+            stderr,
+            runtime,
+            CancellationToken.None);
+        return new OrderedAppResult(
+            new AppResult(exitCode, stdout.ToString(), stderr.ToString()),
+            ledger.Snapshot());
+    }
+
+    private static int AssertProgressIsClearBefore(IReadOnlyList<OrderedWrite> writes, string stdoutText)
+    {
+        var outputIndex = writes
+            .Select((write, index) => (write, index))
+            .First(item =>
+                item.write.Stream == "stdout" &&
+                item.write.Text.Contains(stdoutText, StringComparison.Ordinal))
+            .index;
+        var lastError = writes
+            .Take(outputIndex)
+            .Last(write => write.Stream == "stderr");
+        Assert.True(
+            IsClearWrite(lastError.Text),
+            $"Expected progress to be clear before '{stdoutText}', but the last stderr write was '{lastError.Text}'.");
+        return outputIndex;
+    }
+
+    private static bool IsClearWrite(string text) =>
+        text.StartsWith('\r') &&
+        text.Length > 1 &&
+        text.All(character => character is '\r' or ' ');
+
+    private static string CreateCleanupFailureGitWrapper(
+        string path,
+        string markerPath,
+        string repositoryPath)
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+
+        static string Quote(string value) => $"'{value.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+
+        File.WriteAllText(
+            path,
+            $"""
+            #!/bin/sh
+            has_check_ignore=false
+            has_quiet=false
+            for argument in "$@"; do
+              if [ "$argument" = "check-ignore" ]; then has_check_ignore=true; fi
+              if [ "$argument" = "-q" ]; then has_quiet=true; fi
+            done
+            if [ -f {Quote(markerPath)} ] && [ "$has_check_ignore" = true ] && [ "$has_quiet" = true ]; then
+              git "$@"
+              status=$?
+              if [ "$status" -eq 0 ]; then rm -rf {Quote(repositoryPath)}; fi
+              exit "$status"
+            fi
+            exec git "$@"
+            """);
+        File.SetUnixFileMode(
+            path,
+            UnixFileMode.UserRead |
+            UnixFileMode.UserWrite |
+            UnixFileMode.UserExecute);
+        return path;
+    }
+
     private sealed record AppResult(int ExitCode, string Stdout, string Stderr);
+
+    private sealed record OrderedAppResult(AppResult Result, IReadOnlyList<OrderedWrite> Writes);
+
+    private sealed record OrderedWrite(int Sequence, string Stream, string Text);
+
+    private sealed class CallbackTextReader(string text, Action<int> beforeReadLine) : StringReader(text)
+    {
+        private int lineNumber;
+
+        public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lineNumber++;
+            beforeReadLine(lineNumber);
+            return ValueTask.FromResult(ReadLine());
+        }
+    }
+
+    private sealed class WriteLedger
+    {
+        private readonly object sync = new();
+        private readonly List<OrderedWrite> writes = [];
+        private int sequence;
+
+        public void Add(string stream, string text)
+        {
+            lock (sync)
+            {
+                writes.Add(new OrderedWrite(++sequence, stream, text));
+            }
+        }
+
+        public IReadOnlyList<OrderedWrite> Snapshot()
+        {
+            lock (sync)
+            {
+                return writes.OrderBy(write => write.Sequence).ToArray();
+            }
+        }
+    }
+
+    private sealed class OrderedTextWriter(string stream, WriteLedger ledger) : StringWriter
+    {
+        public override void Write(char value) => Append(value.ToString());
+
+        public override void Write(string? value) => Append(value ?? string.Empty);
+
+        public override void Write(ReadOnlySpan<char> buffer) => Append(buffer.ToString());
+
+        public override void WriteLine() => Append(NewLine);
+
+        public override void WriteLine(string? value) => Append($"{value}{NewLine}");
+
+        public override Task WriteAsync(string? value)
+        {
+            Append(value ?? string.Empty);
+            return Task.CompletedTask;
+        }
+
+        public override Task WriteAsync(
+            ReadOnlyMemory<char> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Append(buffer.ToString());
+            return Task.CompletedTask;
+        }
+
+        public override Task WriteLineAsync(string? value)
+        {
+            Append($"{value}{NewLine}");
+            return Task.CompletedTask;
+        }
+
+        public override Task WriteLineAsync(
+            ReadOnlyMemory<char> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Append($"{buffer}{NewLine}");
+            return Task.CompletedTask;
+        }
+
+        private void Append(string value)
+        {
+            ledger.Add(stream, value);
+            GetStringBuilder().Append(value);
+        }
+    }
 }

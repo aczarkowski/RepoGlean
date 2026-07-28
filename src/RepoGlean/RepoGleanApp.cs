@@ -6,6 +6,7 @@ using RepoGlean.Cleaning;
 using RepoGlean.Configuration;
 using RepoGlean.Git;
 using RepoGlean.Output;
+using RepoGlean.Progress;
 using RepoGlean.Rules;
 using RepoGlean.Scanning;
 
@@ -16,7 +17,8 @@ internal sealed record AppRuntime(
     string HomeDirectory,
     bool IsErrorInteractive,
     bool IsOutputInteractive = false,
-    IDriveRootProvider? DriveRootProvider = null)
+    IDriveRootProvider? DriveRootProvider = null,
+    Func<int?>? ErrorWidthProvider = null)
 {
     public static AppRuntime Create(TextWriter stdout, TextWriter stderr) => Create(
         stdout,
@@ -32,7 +34,23 @@ internal sealed record AppRuntime(
         "git",
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ReferenceEquals(stderr, Console.Error) && !isErrorRedirected,
-        ReferenceEquals(stdout, Console.Out) && !isOutputRedirected);
+        ReferenceEquals(stdout, Console.Out) && !isOutputRedirected,
+        ErrorWidthProvider: GetErrorWidth);
+
+    private static int? GetErrorWidth()
+    {
+        try
+        {
+            return Console.WindowWidth;
+        }
+        catch (Exception exception) when (exception is
+            IOException or
+            PlatformNotSupportedException or
+            ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
 }
 
 public static class RepoGleanApp
@@ -165,99 +183,146 @@ public static class RepoGleanApp
         TextWriter stderr,
         CancellationToken cancellationToken)
     {
-        var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
-        var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
-        var git = new GitClient(runtime.GitExecutable);
-        await git.GetVersionAsync(cancellationToken).ConfigureAwait(false);
-        var showProgress = runtime.IsErrorInteractive && !options.NoProgress && !options.Quiet && options.OutputFormat != OutputFormat.Json;
-        if (showProgress) await stderr.WriteLineAsync($"Scanning {roots.Count} root(s) before cleanup...").ConfigureAwait(false);
-
-        var discoveryService = runtime.DriveRootProvider is null
-            ? new RepositoryDiscovery(git)
-            : new RepositoryDiscovery(git, runtime.DriveRootProvider);
-        var discovery = await discoveryService
-            .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
-            .ConfigureAwait(false);
-        var ruleCatalog = RuleCatalog.Create(config);
-        var scanOptions = new ScanOptions(options.Repositories, options.Categories, exclusions, options.MinimumBytes);
-        var scan = await new RepositoryScanner(git)
-            .ScanAsync(discovery.Repositories, ruleCatalog, scanOptions, cancellationToken)
-            .ConfigureAwait(false);
-        var operationWarnings = discovery.Warnings.Concat(scan.Warnings).ToArray();
-        var effectiveRoots = discovery.EffectiveRoots ?? roots;
-        var availableRepositories = scan.Repositories.Where(repository => repository.Candidates.Count > 0).ToArray();
-
-        IReadOnlyList<ArtifactCandidate> selectedCandidates;
-        if (!options.Yes && !options.DryRun && availableRepositories.Length > 0)
+        await using var progress = ProgressReporterFactory.Create(
+            runtime.IsErrorInteractive,
+            options.OutputFormat,
+            options.Quiet,
+            options.Verbose,
+            options.NoProgress,
+            stderr,
+            runtime.ErrorWidthProvider ?? (() => null));
+        var selectedCount = 0;
+        try
         {
-            HumanReportWriter.WriteRepositorySelection(availableRepositories, stdout);
-            var repositoryDefaults = Enumerable.Range(0, availableRepositories.Length).ToArray();
-            var repositorySelection = await ReadSelectionAsync(
-                input,
-                stdout,
-                "Select repositories [Enter=all]: ",
-                availableRepositories.Length,
-                repositoryDefaults,
-                cancellationToken).ConfigureAwait(false);
-            var selectedRepositories = repositorySelection.Select(index => availableRepositories[index]).ToArray();
-            var availableCandidates = selectedRepositories.SelectMany(repository => repository.Candidates).ToArray();
-            HumanReportWriter.WriteCandidateSelection(availableCandidates, stdout);
-            var includeOptIn = options.All || options.Categories.Count > 0;
-            var candidateDefaults = FilterCandidates(selectedRepositories, includeOptIn)
-                .Select(candidate => Array.IndexOf(availableCandidates, candidate))
-                .ToArray();
-            var candidateSelection = await ReadSelectionAsync(
-                input,
-                stdout,
-                "Select artifacts [Enter=defaults, all=include dependencies]: ",
-                availableCandidates.Length,
-                candidateDefaults,
-                cancellationToken).ConfigureAwait(false);
-            selectedCandidates = Array.AsReadOnly(candidateSelection.Select(index => availableCandidates[index]).ToArray());
-        }
-        else
-        {
-            var includeOptIn = options.All || options.Categories.Count > 0;
-            selectedCandidates = FilterCandidates(availableRepositories, includeOptIn);
-        }
+            var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
+            var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
+            var git = new GitClient(runtime.GitExecutable);
+            await git.GetVersionAsync(cancellationToken).ConfigureAwait(false);
 
-        if (!options.Yes && !options.DryRun && selectedCandidates.Count > 0)
-        {
-            await stdout.WriteAsync($"Type delete to permanently remove {selectedCandidates.Count} selected artifact(s): ").ConfigureAwait(false);
-            var confirmation = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-            if (!string.Equals(confirmation, "delete", StringComparison.Ordinal))
+            var discoveryService = runtime.DriveRootProvider is null
+                ? new RepositoryDiscovery(git, progress, ProgressOperation.Clean)
+                : new RepositoryDiscovery(git, runtime.DriveRootProvider, progress, ProgressOperation.Clean);
+            var discovery = await discoveryService
+                .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
+                .ConfigureAwait(false);
+            var ruleCatalog = RuleCatalog.Create(config);
+            var scanOptions = new ScanOptions(options.Repositories, options.Categories, exclusions, options.MinimumBytes);
+            var scan = await new RepositoryScanner(git, progress, ProgressOperation.Clean)
+                .ScanAsync(discovery.Repositories, ruleCatalog, scanOptions, cancellationToken)
+                .ConfigureAwait(false);
+            var operationWarnings = discovery.Warnings.Concat(scan.Warnings).ToArray();
+            var effectiveRoots = discovery.EffectiveRoots ?? roots;
+            var availableRepositories = scan.Repositories.Where(repository => repository.Candidates.Count > 0).ToArray();
+
+            IReadOnlyList<ArtifactCandidate> selectedCandidates;
+            if (!options.Yes && !options.DryRun && availableRepositories.Length > 0)
             {
-                await stdout.WriteLineAsync("Cleanup cancelled; nothing was deleted.").ConfigureAwait(false);
-                return 0;
+                PauseProgress(progress);
+                HumanReportWriter.WriteRepositorySelection(availableRepositories, stdout);
+                var repositoryDefaults = Enumerable.Range(0, availableRepositories.Length).ToArray();
+                var repositorySelection = await ReadSelectionAsync(
+                    input,
+                    stdout,
+                    "Select repositories [Enter=all]: ",
+                    availableRepositories.Length,
+                    repositoryDefaults,
+                    cancellationToken).ConfigureAwait(false);
+                var selectedRepositories = repositorySelection.Select(index => availableRepositories[index]).ToArray();
+                var availableCandidates = selectedRepositories.SelectMany(repository => repository.Candidates).ToArray();
+                PauseProgress(progress);
+                HumanReportWriter.WriteCandidateSelection(availableCandidates, stdout);
+                var includeOptIn = options.All || options.Categories.Count > 0;
+                var candidateDefaults = FilterCandidates(selectedRepositories, includeOptIn)
+                    .Select(candidate => Array.IndexOf(availableCandidates, candidate))
+                    .ToArray();
+                var candidateSelection = await ReadSelectionAsync(
+                    input,
+                    stdout,
+                    "Select artifacts [Enter=defaults, all=include dependencies]: ",
+                    availableCandidates.Length,
+                    candidateDefaults,
+                    cancellationToken).ConfigureAwait(false);
+                selectedCandidates = Array.AsReadOnly(candidateSelection.Select(index => availableCandidates[index]).ToArray());
             }
-        }
+            else
+            {
+                var includeOptIn = options.All || options.Categories.Count > 0;
+                selectedCandidates = FilterCandidates(availableRepositories, includeOptIn);
+            }
 
-        var cleanup = await new CleanupService(git)
-            .ExecuteAsync(new CleanupRequest(selectedCandidates, effectiveRoots, ruleCatalog, options.DryRun), cancellationToken)
-            .ConfigureAwait(false);
-        var report = ReportDocument.FromCleanup(effectiveRoots, cleanup, operationWarnings);
-        if (options.OutputFormat == OutputFormat.Json)
-        {
-            await JsonReportWriter.WriteAsync(report, stdout, CancellationToken.None).ConfigureAwait(false);
-        }
-        else
-        {
-            HumanReportWriter.WriteCleanup(
-                report,
-                stdout,
-                new HumanReportOptions(
-                    Details: false,
-                    Quiet: options.Quiet,
-                    Verbose: options.Verbose,
-                    UseColor: runtime.IsOutputInteractive && !options.NoColor));
-        }
+            selectedCount = selectedCandidates.Count;
+            if (!options.Yes && !options.DryRun && selectedCandidates.Count > 0)
+            {
+                PauseProgress(progress);
+                await stdout.WriteAsync($"Type delete to permanently remove {selectedCandidates.Count} selected artifact(s): ").ConfigureAwait(false);
+                var confirmation = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(confirmation, "delete", StringComparison.Ordinal))
+                {
+                    PauseProgress(progress);
+                    await stdout.WriteLineAsync("Cleanup cancelled; nothing was deleted.").ConfigureAwait(false);
+                    return 0;
+                }
 
-        if (showProgress) await stderr.WriteLineAsync("Cleanup complete.").ConfigureAwait(false);
-        if (cleanup.IsInterrupted) return 130;
-        var hasSafetySkips = cleanup.Items.Any(item =>
-            item.Outcome == CleanupOutcome.Skipped &&
-            !(cleanup.DryRun && item.Message.StartsWith("Validated; dry run", StringComparison.Ordinal)));
-        return cleanup.FailedCount > 0 || hasSafetySkips || operationWarnings.Length > 0 ? 3 : 0;
+                ResumeProgress(progress);
+            }
+
+            var cleanup = await new CleanupService(git, progress: progress)
+                .ExecuteAsync(new CleanupRequest(selectedCandidates, effectiveRoots, ruleCatalog, options.DryRun), cancellationToken)
+                .ConfigureAwait(false);
+            var report = ReportDocument.FromCleanup(effectiveRoots, cleanup, operationWarnings);
+            ReportProgress(
+                progress,
+                CreateCleanupTerminalEvent(
+                    cleanup.IsInterrupted ? ProgressEventKind.Interrupted : ProgressEventKind.Completed,
+                    cleanup,
+                    report));
+            PauseProgress(progress);
+            if (options.OutputFormat == OutputFormat.Json)
+            {
+                await JsonReportWriter.WriteAsync(report, stdout, CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                HumanReportWriter.WriteCleanup(
+                    report,
+                    stdout,
+                    new HumanReportOptions(
+                        Details: false,
+                        Quiet: options.Quiet,
+                        Verbose: options.Verbose,
+                        UseColor: runtime.IsOutputInteractive && !options.NoColor));
+            }
+
+            if (cleanup.IsInterrupted) return 130;
+            var hasSafetySkips = cleanup.Items.Any(item =>
+                item.Outcome == CleanupOutcome.Skipped &&
+                !IsValidatedDryRun(cleanup, item));
+            return cleanup.FailedCount > 0 || hasSafetySkips || operationWarnings.Length > 0 ? 3 : 0;
+        }
+        catch (OperationCanceledException)
+        {
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Interrupted,
+                    ProgressOperation.Clean,
+                    Current: 0,
+                    Total: selectedCount,
+                    CandidateCount: selectedCount));
+            PauseProgress(progress);
+            throw;
+        }
+        catch (Exception exception) when (IsOperationalException(exception))
+        {
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Failed,
+                    ProgressOperation.Clean,
+                    Message: exception.Message));
+            PauseProgress(progress);
+            throw;
+        }
     }
 
     private static IReadOnlyList<ArtifactCandidate> FilterCandidates(
@@ -267,6 +332,95 @@ public static class RepoGleanApp
             .SelectMany(repository => repository.Candidates)
             .Where(candidate => includeOptIn || candidate.Preselected)
             .ToArray());
+
+    private static OperationProgressEvent CreateCleanupTerminalEvent(
+        ProgressEventKind kind,
+        CleanupResult cleanup,
+        ReportDocument report)
+    {
+        var validatedCount = cleanup.Items.LongCount(item => IsValidatedDryRun(cleanup, item));
+        var deletedCount = cleanup.Items.LongCount(item => item.DeletionCompleted);
+        var skippedCount = cleanup.Items.LongCount(item =>
+            item.Outcome == CleanupOutcome.Skipped &&
+            !IsValidatedDryRun(cleanup, item));
+        var failedCount = cleanup.Items.LongCount(item =>
+            item.Outcome == CleanupOutcome.Failed &&
+            !item.DeletionCompleted);
+        var processedEstimatedBytes = cleanup.Items
+            .Where(item => item.DeletionCompleted || IsValidatedDryRun(cleanup, item))
+            .Aggregate(
+                0L,
+                (total, item) => FileTreeAnalyzer.SaturatingAdd(
+                    total,
+                    item.Candidate.EstimatedBytes));
+        return new OperationProgressEvent(
+            kind,
+            ProgressOperation.Clean,
+            Current: cleanup.Items.Count,
+            Total: (int)cleanup.SelectedCount,
+            RepositoryCount: report.Totals.RepositoryCount,
+            CandidateCount: cleanup.SelectedCount,
+            DeletedCount: deletedCount,
+            ValidatedCount: validatedCount,
+            SkippedCount: skippedCount,
+            FailedCount: failedCount,
+            WarningCount: report.Warnings.Count,
+            EstimatedBytes: processedEstimatedBytes,
+            DryRun: cleanup.DryRun);
+    }
+
+    private static bool IsValidatedDryRun(
+        CleanupResult cleanup,
+        CleanupCandidateResult item) =>
+        cleanup.DryRun &&
+        item.Outcome == CleanupOutcome.Skipped &&
+        item.Message.StartsWith("Validated; dry run", StringComparison.Ordinal);
+
+    private static void ReportProgress(
+        IOperationProgress progress,
+        OperationProgressEvent progressEvent)
+    {
+        try
+        {
+            progress.Report(progressEvent);
+        }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+        }
+    }
+
+    private static void PauseProgress(IOperationProgress progress)
+    {
+        try
+        {
+            progress.Pause();
+        }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+        }
+    }
+
+    private static void ResumeProgress(IOperationProgress progress)
+    {
+        try
+        {
+            progress.Resume();
+        }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+        }
+    }
+
+    private static bool IsRecoverableProgressException(Exception exception) =>
+        exception is not OutOfMemoryException
+        and not StackOverflowException
+        and not AccessViolationException;
+
+    private static bool IsOperationalException(Exception exception) =>
+        exception is GitUnavailableException or
+        GitCommandException or
+        IOException or
+        UnauthorizedAccessException;
 
     private static async Task<IReadOnlyList<int>> ReadSelectionAsync(
         TextReader input,
@@ -295,47 +449,86 @@ public static class RepoGleanApp
         TextWriter stderr,
         CancellationToken cancellationToken)
     {
-        var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
-        var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
-        var git = new GitClient(runtime.GitExecutable);
-        await git.GetVersionAsync(cancellationToken).ConfigureAwait(false);
-
-        var showProgress = runtime.IsErrorInteractive && !options.NoProgress && !options.Quiet && options.OutputFormat != OutputFormat.Json;
-        if (showProgress) await stderr.WriteLineAsync($"Scanning {roots.Count} root(s)...").ConfigureAwait(false);
-        var discoveryService = runtime.DriveRootProvider is null
-            ? new RepositoryDiscovery(git)
-            : new RepositoryDiscovery(git, runtime.DriveRootProvider);
-        var discovery = await discoveryService
-            .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
-            .ConfigureAwait(false);
-        var scanOptions = new ScanOptions(options.Repositories, options.Categories, exclusions, options.MinimumBytes);
-        var result = await new RepositoryScanner(git)
-            .ScanAsync(discovery.Repositories, RuleCatalog.Create(config), scanOptions, cancellationToken)
-            .ConfigureAwait(false);
-        if (discovery.Warnings.Count > 0)
+        await using var progress = ProgressReporterFactory.Create(
+            runtime.IsErrorInteractive,
+            options.OutputFormat,
+            options.Quiet,
+            options.Verbose,
+            options.NoProgress,
+            stderr,
+            runtime.ErrorWidthProvider ?? (() => null));
+        try
         {
-            result = result with { Warnings = Array.AsReadOnly(discovery.Warnings.Concat(result.Warnings).ToArray()) };
-        }
+            var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
+            var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
+            var git = new GitClient(runtime.GitExecutable);
+            await git.GetVersionAsync(cancellationToken).ConfigureAwait(false);
 
-        var report = ReportDocument.FromScan(discovery.EffectiveRoots ?? roots, result);
-        if (options.OutputFormat == OutputFormat.Json)
-        {
-            await JsonReportWriter.WriteAsync(report, stdout, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            HumanReportWriter.WriteScan(
-                report,
-                stdout,
-                new HumanReportOptions(
-                    options.Details,
-                    options.Quiet,
-                    options.Verbose,
-                    runtime.IsOutputInteractive && !options.NoColor));
-        }
+            var discoveryService = runtime.DriveRootProvider is null
+                ? new RepositoryDiscovery(git, progress, ProgressOperation.Scan)
+                : new RepositoryDiscovery(git, runtime.DriveRootProvider, progress, ProgressOperation.Scan);
+            var discovery = await discoveryService
+                .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
+                .ConfigureAwait(false);
+            var scanOptions = new ScanOptions(options.Repositories, options.Categories, exclusions, options.MinimumBytes);
+            var result = await new RepositoryScanner(git, progress, ProgressOperation.Scan)
+                .ScanAsync(discovery.Repositories, RuleCatalog.Create(config), scanOptions, cancellationToken)
+                .ConfigureAwait(false);
+            if (discovery.Warnings.Count > 0)
+            {
+                result = result with { Warnings = Array.AsReadOnly(discovery.Warnings.Concat(result.Warnings).ToArray()) };
+            }
 
-        if (showProgress) await stderr.WriteLineAsync("Scan complete.").ConfigureAwait(false);
-        return report.Warnings.Count == 0 ? 0 : 3;
+            var report = ReportDocument.FromScan(discovery.EffectiveRoots ?? roots, result);
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Completed,
+                    ProgressOperation.Scan,
+                    RepositoryCount: report.Totals.RepositoryCount,
+                    CandidateCount: report.Totals.CandidateCount,
+                    EstimatedBytes: report.Totals.EstimatedBytes,
+                    WarningCount: report.Warnings.Count));
+            PauseProgress(progress);
+            if (options.OutputFormat == OutputFormat.Json)
+            {
+                await JsonReportWriter.WriteAsync(report, stdout, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                HumanReportWriter.WriteScan(
+                    report,
+                    stdout,
+                    new HumanReportOptions(
+                        options.Details,
+                        options.Quiet,
+                        options.Verbose,
+                        runtime.IsOutputInteractive && !options.NoColor));
+            }
+
+            return report.Warnings.Count == 0 ? 0 : 3;
+        }
+        catch (OperationCanceledException)
+        {
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Interrupted,
+                    ProgressOperation.Scan));
+            PauseProgress(progress);
+            throw;
+        }
+        catch (Exception exception) when (IsOperationalException(exception))
+        {
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Failed,
+                    ProgressOperation.Scan,
+                    Message: exception.Message));
+            PauseProgress(progress);
+            throw;
+        }
     }
 
     private static IReadOnlyList<string> ResolveRoots(

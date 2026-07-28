@@ -1,4 +1,5 @@
 using RepoGlean.Git;
+using RepoGlean.Progress;
 using RepoGlean.Scanning;
 using RepoGlean.Tests.Support;
 
@@ -6,6 +7,35 @@ namespace RepoGlean.Tests.Scanning;
 
 public sealed class RepositoryDiscoveryTests
 {
+    [Fact]
+    public async Task DiscoverAsync_reports_repository_discovery_without_directory_traversal_events()
+    {
+        using var temporary = new TemporaryDirectory();
+        _ = await GitTestRepository.CreateAsync(temporary.GetPath("first"));
+        _ = await GitTestRepository.CreateAsync(temporary.GetPath("second"));
+        Directory.CreateDirectory(temporary.GetPath("ordinary-directory/nested"));
+        var progress = new RecordingProgress();
+        var discovery = new RepositoryDiscovery(new GitClient(), progress, ProgressOperation.Clean);
+
+        var result = await discovery.DiscoverAsync([temporary.Path]);
+
+        Assert.Equal(2, result.Repositories.Count);
+        var events = progress.Events;
+        Assert.Equal(ProgressEventKind.DiscoveryStarted, events.First().Kind);
+        Assert.Equal(2, events.Count(item => item.Kind == ProgressEventKind.RepositoryFound));
+        Assert.Equal(
+            [1L, 2L],
+            events
+                .Where(item => item.Kind == ProgressEventKind.RepositoryFound)
+                .Select(item => item.RepositoryCount));
+        Assert.Equal(ProgressEventKind.DiscoveryCompleted, events.Last().Kind);
+        Assert.Equal(2, events.Last().RepositoryCount);
+        Assert.All(events, item => Assert.Equal(ProgressOperation.Clean, item.Operation));
+        Assert.DoesNotContain(events, item =>
+            item.Path is not null &&
+            item.Path.Contains("ordinary-directory", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task DiscoverAsync_finds_git_directories_worktrees_and_submodules()
     {
@@ -111,11 +141,16 @@ public sealed class RepositoryDiscoveryTests
     {
         using var temporary = new TemporaryDirectory();
         var missing = temporary.GetPath("missing");
+        var progress = new RecordingProgress();
 
-        var result = await new RepositoryDiscovery(new GitClient()).DiscoverAsync([missing]);
+        var result = await new RepositoryDiscovery(new GitClient(), progress, ProgressOperation.Scan)
+            .DiscoverAsync([missing]);
 
         var warning = Assert.Single(result.Warnings);
         Assert.Equal(System.IO.Path.GetFullPath(missing), warning.Path);
+        var warningEvent = Assert.Single(progress.Events, item => item.Kind == ProgressEventKind.Warning);
+        Assert.Equal(warning.Path, warningEvent.Path);
+        Assert.Equal(warning.Message, warningEvent.Message);
     }
 
     [Fact]

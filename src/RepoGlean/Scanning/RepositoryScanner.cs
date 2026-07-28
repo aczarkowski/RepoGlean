@@ -1,5 +1,6 @@
 using RepoGlean.Cli;
 using RepoGlean.Git;
+using RepoGlean.Progress;
 using RepoGlean.Rules;
 
 namespace RepoGlean.Scanning;
@@ -8,11 +9,24 @@ public sealed class RepositoryScanner
 {
     private readonly GitClient git;
     private readonly FileTreeAnalyzer analyzer;
+    private readonly IOperationProgress progress;
+    private readonly ProgressOperation operation;
 
     public RepositoryScanner(GitClient git, FileTreeAnalyzer? analyzer = null)
+        : this(git, NullOperationProgress.Instance, ProgressOperation.Scan, analyzer)
+    {
+    }
+
+    internal RepositoryScanner(
+        GitClient git,
+        IOperationProgress progress,
+        ProgressOperation operation,
+        FileTreeAnalyzer? analyzer = null)
     {
         this.git = git ?? throw new ArgumentNullException(nameof(git));
         this.analyzer = analyzer ?? new FileTreeAnalyzer();
+        this.progress = progress ?? throw new ArgumentNullException(nameof(progress));
+        this.operation = operation;
     }
 
     public async Task<ScanResult> ScanAsync(
@@ -27,18 +41,46 @@ public sealed class RepositoryScanner
         var results = new List<RepositoryScanResult>();
         var allWarnings = new List<OperationWarning>();
         var hasCandidateFilters = options.CategoryFilters.Count > 0 || options.Exclusions.Count > 0 || options.MinimumBytes is not null;
+        if (repositoryRoots.Count > 0) cancellationToken.ThrowIfCancellationRequested();
+        var selectedRepositoryRoots = repositoryRoots
+            .Distinct(PathComparer)
+            .Select(Path.GetFullPath)
+            .Where(repositoryRoot => MatchesRepositoryFilter(repositoryRoot, options.RepositoryFilters))
+            .ToArray();
+        long cumulativeCandidateCount = 0;
+        long cumulativeEstimatedBytes = 0;
+        long cumulativeWarningCount = 0;
 
-        foreach (var repositoryRootValue in repositoryRoots.Distinct(PathComparer))
+        for (var index = 0; index < selectedRepositoryRoots.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var repositoryRoot = Path.GetFullPath(repositoryRootValue);
-            if (!MatchesRepositoryFilter(repositoryRoot, options.RepositoryFilters)) continue;
+            var repositoryRoot = selectedRepositoryRoots[index];
+            var current = index + 1;
+            progress.Report(new OperationProgressEvent(
+                ProgressEventKind.RepositoryScanStarted,
+                operation,
+                Path: repositoryRoot,
+                Current: current,
+                Total: selectedRepositoryRoots.Length,
+                CandidateCount: cumulativeCandidateCount,
+                EstimatedBytes: cumulativeEstimatedBytes,
+                WarningCount: cumulativeWarningCount));
             IReadOnlyList<string> visiblePaths;
             try
             {
                 if (!await git.IsWorkingTreeAsync(repositoryRoot, cancellationToken).ConfigureAwait(false))
                 {
-                    allWarnings.Add(new OperationWarning(repositoryRoot, "Path is not a Git working tree."));
+                    AddWarning(allWarnings, new OperationWarning(repositoryRoot, "Path is not a Git working tree."));
+                    cumulativeWarningCount++;
+                    ReportRepositoryScanCompleted(
+                        repositoryRoot,
+                        current,
+                        selectedRepositoryRoots.Length,
+                        0,
+                        0,
+                        cumulativeCandidateCount,
+                        cumulativeEstimatedBytes,
+                        cumulativeWarningCount);
                     continue;
                 }
 
@@ -46,7 +88,17 @@ public sealed class RepositoryScanner
             }
             catch (GitCommandException exception)
             {
-                allWarnings.Add(new OperationWarning(repositoryRoot, exception.Message));
+                AddWarning(allWarnings, new OperationWarning(repositoryRoot, exception.Message));
+                cumulativeWarningCount++;
+                ReportRepositoryScanCompleted(
+                    repositoryRoot,
+                    current,
+                    selectedRepositoryRoots.Length,
+                    0,
+                    0,
+                    cumulativeCandidateCount,
+                    cumulativeEstimatedBytes,
+                    cumulativeWarningCount);
                 continue;
             }
 
@@ -64,7 +116,7 @@ public sealed class RepositoryScanner
                 cancellationToken).ConfigureAwait(false);
             candidates.Sort(CompareCandidates);
             allWarnings.AddRange(repositoryWarnings);
-            if (candidates.Count == 0 && hasCandidateFilters) continue;
+            cumulativeWarningCount = FileTreeAnalyzer.SaturatingAdd(cumulativeWarningCount, repositoryWarnings.Count);
 
             long fileCount = 0;
             long estimatedBytes = 0;
@@ -74,13 +126,28 @@ public sealed class RepositoryScanner
                 estimatedBytes = FileTreeAnalyzer.SaturatingAdd(estimatedBytes, candidate.EstimatedBytes);
             }
 
-            var frozenWarnings = Array.AsReadOnly(repositoryWarnings.ToArray());
-            results.Add(new RepositoryScanResult(
+            cumulativeCandidateCount = FileTreeAnalyzer.SaturatingAdd(cumulativeCandidateCount, candidates.Count);
+            cumulativeEstimatedBytes = FileTreeAnalyzer.SaturatingAdd(cumulativeEstimatedBytes, estimatedBytes);
+            if (candidates.Count > 0 || !hasCandidateFilters)
+            {
+                var frozenWarnings = Array.AsReadOnly(repositoryWarnings.ToArray());
+                results.Add(new RepositoryScanResult(
+                    repositoryRoot,
+                    Array.AsReadOnly(candidates.ToArray()),
+                    fileCount,
+                    estimatedBytes,
+                    frozenWarnings));
+            }
+
+            ReportRepositoryScanCompleted(
                 repositoryRoot,
-                Array.AsReadOnly(candidates.ToArray()),
-                fileCount,
+                current,
+                selectedRepositoryRoots.Length,
+                candidates.Count,
                 estimatedBytes,
-                frozenWarnings));
+                cumulativeCandidateCount,
+                cumulativeEstimatedBytes,
+                cumulativeWarningCount);
         }
 
         results.Sort((left, right) =>
@@ -140,7 +207,7 @@ public sealed class RepositoryScanner
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
-                warnings.Add(new OperationWarning(directory, $"Unable to scan directory: {exception.Message}"));
+                AddWarning(warnings, new OperationWarning(directory, $"Unable to scan directory: {exception.Message}"));
                 continue;
             }
 
@@ -159,7 +226,7 @@ public sealed class RepositoryScanner
                 }
                 catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
                 {
-                    warnings.Add(new OperationWarning(entry, $"Unable to inspect scan entry: {exception.Message}"));
+                    AddWarning(warnings, new OperationWarning(entry, $"Unable to inspect scan entry: {exception.Message}"));
                     continue;
                 }
 
@@ -167,7 +234,7 @@ public sealed class RepositoryScanner
                 if (reservedQuarantine &&
                     (isDirectory || (attributes & FileAttributes.ReparsePoint) != 0))
                 {
-                    warnings.Add(new OperationWarning(
+                    AddWarning(warnings, new OperationWarning(
                         entry,
                         "Skipped reserved RepoGlean quarantine; inspect or remove the stranded payload manually."));
                     continue;
@@ -178,14 +245,14 @@ public sealed class RepositoryScanner
                 {
                     if (activeRules.Any(rule => rule.Matches(relativePath)))
                     {
-                        warnings.Add(new OperationWarning(entry, "Skipped candidate filesystem link, junction, or reparse point."));
+                        AddWarning(warnings, new OperationWarning(entry, "Skipped candidate filesystem link, junction, or reparse point."));
                     }
 
                     continue;
                 }
                 if (isDirectory && IsRepositoryBoundary(entry))
                 {
-                    warnings.Add(new OperationWarning(entry, "Skipped nested repository boundary."));
+                    AddWarning(warnings, new OperationWarning(entry, "Skipped nested repository boundary."));
                     continue;
                 }
 
@@ -282,7 +349,7 @@ public sealed class RepositoryScanner
         }
         catch (GitCommandException exception)
         {
-            warnings.Add(new OperationWarning(batch[0].AbsolutePath, exception.Message));
+            AddWarning(warnings, new OperationWarning(batch[0].AbsolutePath, exception.Message));
             return;
         }
 
@@ -296,12 +363,12 @@ public sealed class RepositoryScanner
 
             if (ContainsVisibleContent(match.RelativePath, visiblePaths))
             {
-                warnings.Add(new OperationWarning(match.AbsolutePath, "Ignored candidate contains tracked or otherwise visible content."));
+                AddWarning(warnings, new OperationWarning(match.AbsolutePath, "Ignored candidate contains tracked or otherwise visible content."));
                 continue;
             }
 
             var analysis = analyzer.Analyze(match.AbsolutePath, repositoryRoot, cancellationToken);
-            warnings.AddRange(analysis.Warnings);
+            foreach (var warning in analysis.Warnings) AddWarning(warnings, warning);
             if (analysis.IsSafe &&
                 analysis.Identity is not null &&
                 analysis.RepositoryIdentity is not null &&
@@ -320,6 +387,41 @@ public sealed class RepositoryScanner
                     analysis.RepositoryIdentity));
             }
         }
+    }
+
+    private void AddWarning(
+        List<OperationWarning> warnings,
+        OperationWarning warning)
+    {
+        warnings.Add(warning);
+        progress.Report(new OperationProgressEvent(
+            ProgressEventKind.Warning,
+            operation,
+            Path: warning.Path,
+            Message: warning.Message));
+    }
+
+    private void ReportRepositoryScanCompleted(
+        string repositoryRoot,
+        int current,
+        int total,
+        long currentCandidateCount,
+        long currentEstimatedBytes,
+        long candidateCount,
+        long estimatedBytes,
+        long warningCount)
+    {
+        progress.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanCompleted,
+            operation,
+            Path: repositoryRoot,
+            Current: current,
+            Total: total,
+            CurrentCandidateCount: currentCandidateCount,
+            CandidateCount: candidateCount,
+            CurrentEstimatedBytes: currentEstimatedBytes,
+            EstimatedBytes: estimatedBytes,
+            WarningCount: warningCount));
     }
 
     private static bool ContainsVisibleContent(string candidateRelativePath, IReadOnlyList<string> visiblePaths)

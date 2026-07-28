@@ -2,6 +2,7 @@ using System.Diagnostics;
 using RepoGlean.Cli;
 using RepoGlean.Configuration;
 using RepoGlean.Git;
+using RepoGlean.Progress;
 using RepoGlean.Rules;
 using RepoGlean.Scanning;
 using RepoGlean.Tests.Support;
@@ -10,6 +11,55 @@ namespace RepoGlean.Tests.Scanning;
 
 public sealed class RepositoryScannerTests
 {
+    [Fact]
+    public async Task ScanAsync_reports_truthful_repository_progress_and_matching_warnings()
+    {
+        using var temporary = new TemporaryDirectory();
+        var withCandidate = await CreateDotnetRepositoryAsync(temporary.GetPath("with-candidate"), 12);
+        var withoutCandidate = await GitTestRepository.CreateAsync(temporary.GetPath("without-candidate"));
+        withoutCandidate.Write("README.md", "ordinary repository");
+        await withoutCandidate.CommitAllAsync();
+        withoutCandidate.Write(".RepoGlean-Quarantine-0123456789abcdef/payload.bin", "stranded");
+        var progress = new RecordingProgress();
+        var scanner = new RepositoryScanner(new GitClient(), progress, ProgressOperation.Clean);
+
+        var result = await scanner.ScanAsync(
+            [withCandidate.Path, withoutCandidate.Path],
+            RuleCatalog.Create(RepoGleanConfig.Default));
+
+        var starts = progress.Events
+            .Where(item => item.Kind == ProgressEventKind.RepositoryScanStarted)
+            .ToArray();
+        Assert.Equal([withCandidate.Path, withoutCandidate.Path], starts.Select(item => item.Path));
+        Assert.Equal([1, 2], starts.Select(item => item.Current));
+        Assert.All(starts, item => Assert.Equal(2, item.Total));
+
+        var completions = progress.Events
+            .Where(item => item.Kind == ProgressEventKind.RepositoryScanCompleted)
+            .ToArray();
+        Assert.Equal([withCandidate.Path, withoutCandidate.Path], completions.Select(item => item.Path));
+        Assert.Equal([1, 2], completions.Select(item => item.Current));
+        Assert.All(completions, item => Assert.Equal(2, item.Total));
+        Assert.Equal([1L, 0L], completions.Select(item => item.CurrentCandidateCount));
+        Assert.Equal([12L, 0L], completions.Select(item => item.CurrentEstimatedBytes));
+        Assert.Equal([1L, 1L], completions.Select(item => item.CandidateCount));
+        Assert.Equal([12L, 12L], completions.Select(item => item.EstimatedBytes));
+        Assert.Equal([0L, 1L], completions.Select(item => item.WarningCount));
+        Assert.True(completions
+            .Zip(completions.Skip(1))
+            .All(pair =>
+                pair.First.CandidateCount <= pair.Second.CandidateCount &&
+                pair.First.EstimatedBytes <= pair.Second.EstimatedBytes));
+
+        var warning = Assert.Single(result.Warnings);
+        var warningEvent = Assert.Single(progress.Events, item => item.Kind == ProgressEventKind.Warning);
+        Assert.Equal(warning.Path, warningEvent.Path);
+        Assert.Equal(warning.Message, warningEvent.Message);
+        Assert.All(progress.Events, item => Assert.Equal(ProgressOperation.Clean, item.Operation));
+        Assert.DoesNotContain(progress.Events, item =>
+            item.Kind is ProgressEventKind.CandidateStarted or ProgressEventKind.CandidateCompleted);
+    }
+
     [Fact]
     public async Task ScanAsync_uses_nested_gitignore_info_exclude_and_global_excludes()
     {

@@ -1,4 +1,5 @@
 using RepoGlean.Git;
+using RepoGlean.Progress;
 using RepoGlean.Rules;
 
 namespace RepoGlean.Scanning;
@@ -50,14 +51,57 @@ public sealed class RepositoryDiscovery
     private readonly IReadOnlyList<string> implicitExclusions;
     private readonly IVolumeBoundary volumeBoundary;
     private readonly IDriveRootProvider driveRootProvider;
+    private readonly IOperationProgress progress;
+    private readonly ProgressOperation operation;
 
     public RepositoryDiscovery(GitClient git)
-        : this(git, GetPlatformExclusions(), new FileSystemIdentityProvider(), new SystemDriveRootProvider())
+        : this(
+            git,
+            GetPlatformExclusions(),
+            new FileSystemIdentityProvider(),
+            new SystemDriveRootProvider(),
+            NullOperationProgress.Instance,
+            ProgressOperation.Scan)
     {
     }
 
     internal RepositoryDiscovery(GitClient git, IDriveRootProvider driveRootProvider)
-        : this(git, GetPlatformExclusions(), new FileSystemIdentityProvider(), driveRootProvider)
+        : this(
+            git,
+            GetPlatformExclusions(),
+            new FileSystemIdentityProvider(),
+            driveRootProvider,
+            NullOperationProgress.Instance,
+            ProgressOperation.Scan)
+    {
+    }
+
+    internal RepositoryDiscovery(
+        GitClient git,
+        IDriveRootProvider driveRootProvider,
+        IOperationProgress progress,
+        ProgressOperation operation)
+        : this(
+            git,
+            GetPlatformExclusions(),
+            new FileSystemIdentityProvider(),
+            driveRootProvider,
+            progress,
+            operation)
+    {
+    }
+
+    internal RepositoryDiscovery(
+        GitClient git,
+        IOperationProgress progress,
+        ProgressOperation operation)
+        : this(
+            git,
+            GetPlatformExclusions(),
+            new FileSystemIdentityProvider(),
+            new SystemDriveRootProvider(),
+            progress,
+            operation)
     {
     }
 
@@ -66,6 +110,23 @@ public sealed class RepositoryDiscovery
         IReadOnlyList<string> implicitExclusions,
         IVolumeBoundary? volumeBoundary = null,
         IDriveRootProvider? driveRootProvider = null)
+        : this(
+            git,
+            implicitExclusions,
+            volumeBoundary,
+            driveRootProvider,
+            NullOperationProgress.Instance,
+            ProgressOperation.Scan)
+    {
+    }
+
+    private RepositoryDiscovery(
+        GitClient git,
+        IReadOnlyList<string> implicitExclusions,
+        IVolumeBoundary? volumeBoundary,
+        IDriveRootProvider? driveRootProvider,
+        IOperationProgress progress,
+        ProgressOperation operation)
     {
         this.git = git ?? throw new ArgumentNullException(nameof(git));
         this.implicitExclusions = implicitExclusions
@@ -75,6 +136,8 @@ public sealed class RepositoryDiscovery
             .ToArray();
         this.volumeBoundary = volumeBoundary ?? new FileSystemIdentityProvider();
         this.driveRootProvider = driveRootProvider ?? new SystemDriveRootProvider();
+        this.progress = progress ?? throw new ArgumentNullException(nameof(progress));
+        this.operation = operation;
     }
 
     public async Task<RepositoryDiscoveryResult> DiscoverAsync(
@@ -89,11 +152,12 @@ public sealed class RepositoryDiscovery
             .Select(Path.GetFullPath)
             .ToList();
         var warnings = new List<OperationWarning>();
+        IReadOnlyList<OperationWarning> driveWarnings = [];
         if (allDrives)
         {
             var driveRoots = driveRootProvider.GetFixedDriveRoots();
             requestedRoots.AddRange(driveRoots.Roots.Select(Path.GetFullPath));
-            warnings.AddRange(driveRoots.Warnings);
+            driveWarnings = driveRoots.Warnings;
         }
 
         requestedRoots = requestedRoots.Distinct(PathComparer).ToList();
@@ -102,19 +166,24 @@ public sealed class RepositoryDiscovery
             .Select(exclusion => Path.IsPathRooted(exclusion) ? Path.GetFullPath(exclusion) : exclusion.Replace('\\', '/'))
             .ToArray();
         var repositories = new HashSet<string>(PathComparer);
+        progress.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            operation,
+            Roots: Array.AsReadOnly(requestedRoots.ToArray())));
+        foreach (var warning in driveWarnings) AddWarning(warnings, warning);
 
         foreach (var root in requestedRoots)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!Directory.Exists(root))
             {
-                warnings.Add(new OperationWarning(root, "Scan root does not exist or is not an accessible directory."));
+                AddWarning(warnings, new OperationWarning(root, "Scan root does not exist or is not an accessible directory."));
                 continue;
             }
 
             if (!volumeBoundary.TryGetMountIdentity(root, out var rootMountIdentity, out var rootMountError) || rootMountIdentity is null)
             {
-                warnings.Add(new OperationWarning(root, rootMountError ?? "Unable to identify the scan root filesystem mount."));
+                AddWarning(warnings, new OperationWarning(root, rootMountError ?? "Unable to identify the scan root filesystem mount."));
                 continue;
             }
 
@@ -134,19 +203,19 @@ public sealed class RepositoryDiscovery
                 if (!TryGetAttributes(path, warnings, out var attributes)) continue;
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
-                    warnings.Add(new OperationWarning(path, "Skipped directory link, junction, or reparse point."));
+                    AddWarning(warnings, new OperationWarning(path, "Skipped directory link, junction, or reparse point."));
                     continue;
                 }
 
                 if (!volumeBoundary.TryGetMountIdentity(path, out var pathMountIdentity, out var volumeError) || pathMountIdentity is null)
                 {
-                    warnings.Add(new OperationWarning(path, volumeError ?? "Unable to identify path filesystem mount."));
+                    AddWarning(warnings, new OperationWarning(path, volumeError ?? "Unable to identify path filesystem mount."));
                     continue;
                 }
 
                 if (pathMountIdentity != rootMountIdentity)
                 {
-                    warnings.Add(new OperationWarning(path, "Skipped path on a different filesystem mount or volume."));
+                    AddWarning(warnings, new OperationWarning(path, "Skipped path on a different filesystem mount or volume."));
                     continue;
                 }
 
@@ -154,11 +223,22 @@ public sealed class RepositoryDiscovery
                 {
                     try
                     {
-                        if (await git.IsWorkingTreeAsync(path, cancellationToken).ConfigureAwait(false)) repositories.Add(Path.GetFullPath(path));
+                        if (await git.IsWorkingTreeAsync(path, cancellationToken).ConfigureAwait(false))
+                        {
+                            var repository = Path.GetFullPath(path);
+                            if (repositories.Add(repository))
+                            {
+                                progress.Report(new OperationProgressEvent(
+                                    ProgressEventKind.RepositoryFound,
+                                    operation,
+                                    Path: repository,
+                                    RepositoryCount: repositories.Count));
+                            }
+                        }
                     }
                     catch (GitCommandException exception)
                     {
-                        warnings.Add(new OperationWarning(path, exception.Message));
+                        AddWarning(warnings, new OperationWarning(path, exception.Message));
                     }
                 }
 
@@ -172,11 +252,15 @@ public sealed class RepositoryDiscovery
                 }
                 catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
                 {
-                    warnings.Add(new OperationWarning(path, $"Unable to enumerate directory: {exception.Message}"));
+                    AddWarning(warnings, new OperationWarning(path, $"Unable to enumerate directory: {exception.Message}"));
                 }
             }
         }
 
+        progress.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryCompleted,
+            operation,
+            RepositoryCount: repositories.Count));
         return new RepositoryDiscoveryResult(
             Array.AsReadOnly(repositories.OrderBy(path => path, PathComparer).ToArray()),
             Array.AsReadOnly(warnings.ToArray()),
@@ -217,7 +301,7 @@ public sealed class RepositoryDiscovery
         return false;
     }
 
-    private static bool TryGetAttributes(string path, List<OperationWarning> warnings, out FileAttributes attributes)
+    private bool TryGetAttributes(string path, List<OperationWarning> warnings, out FileAttributes attributes)
     {
         try
         {
@@ -226,10 +310,22 @@ public sealed class RepositoryDiscovery
         }
         catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
         {
-            warnings.Add(new OperationWarning(path, $"Unable to inspect path: {exception.Message}"));
+            AddWarning(warnings, new OperationWarning(path, $"Unable to inspect path: {exception.Message}"));
             attributes = default;
             return false;
         }
+    }
+
+    private void AddWarning(
+        List<OperationWarning> warnings,
+        OperationWarning warning)
+    {
+        warnings.Add(warning);
+        progress.Report(new OperationProgressEvent(
+            ProgressEventKind.Warning,
+            operation,
+            Path: warning.Path,
+            Message: warning.Message));
     }
 
     internal static bool IsSameOrDescendant(string path, string parent)

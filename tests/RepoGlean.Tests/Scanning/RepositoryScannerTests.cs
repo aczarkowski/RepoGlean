@@ -61,6 +61,71 @@ public sealed class RepositoryScannerTests
     }
 
     [Fact]
+    public async Task ScanAsync_preserves_results_and_warnings_when_progress_reporting_fails()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateDotnetRepositoryAsync(temporary.GetPath("repository"), 12);
+        repository.Write(".RepoGlean-Quarantine-0123456789abcdef/payload.bin", "stranded");
+        var progress = new ThrowingProgress(new InvalidOperationException("injected progress failure"));
+        var scanner = new RepositoryScanner(new GitClient(), progress, ProgressOperation.Scan);
+
+        var result = await scanner.ScanAsync(
+            [repository.Path],
+            RuleCatalog.Create(RepoGleanConfig.Default));
+
+        var scannedRepository = Assert.Single(result.Repositories);
+        var candidate = Assert.Single(scannedRepository.Candidates);
+        Assert.Equal(12, candidate.EstimatedBytes);
+        var warning = Assert.Single(result.Warnings);
+        Assert.Equal(repository.GetPath(".RepoGlean-Quarantine-0123456789abcdef"), warning.Path);
+        Assert.Equal(
+            "Skipped reserved RepoGlean quarantine; inspect or remove the stranded payload manually.",
+            warning.Message);
+    }
+
+    [Fact]
+    public async Task ScanAsync_does_not_swallow_catastrophic_progress_failures()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repository"));
+        var failure = new OutOfMemoryException("injected catastrophic progress failure");
+        var progress = new ThrowingProgress(failure);
+        var scanner = new RepositoryScanner(new GitClient(), progress, ProgressOperation.Scan);
+
+        var exception = await Assert.ThrowsAsync<OutOfMemoryException>(() =>
+            scanner.ScanAsync([repository.Path], RuleCatalog.Create(RepoGleanConfig.Default)));
+
+        Assert.Same(failure, exception);
+    }
+
+    [Fact]
+    public async Task ScanAsync_normalizes_repository_aliases_before_counting_distinct_roots()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repository"));
+        var relativeAlias = Path.GetRelativePath(Directory.GetCurrentDirectory(), repository.Path);
+        var progress = new RecordingProgress();
+        var scanner = new RepositoryScanner(new GitClient(), progress, ProgressOperation.Scan);
+
+        var result = await scanner.ScanAsync(
+            [repository.Path, relativeAlias],
+            RuleCatalog.Create(RepoGleanConfig.Default));
+
+        var scannedRepository = Assert.Single(result.Repositories);
+        Assert.Equal(repository.Path, scannedRepository.RepositoryRoot);
+        var started = Assert.Single(
+            progress.Events,
+            item => item.Kind == ProgressEventKind.RepositoryScanStarted);
+        Assert.Equal(1, started.Current);
+        Assert.Equal(1, started.Total);
+        var completed = Assert.Single(
+            progress.Events,
+            item => item.Kind == ProgressEventKind.RepositoryScanCompleted);
+        Assert.Equal(1, completed.Current);
+        Assert.Equal(1, completed.Total);
+    }
+
+    [Fact]
     public async Task ScanAsync_uses_nested_gitignore_info_exclude_and_global_excludes()
     {
         using var temporary = new TemporaryDirectory();

@@ -43,8 +43,8 @@ public sealed class RepositoryScanner
         var hasCandidateFilters = options.CategoryFilters.Count > 0 || options.Exclusions.Count > 0 || options.MinimumBytes is not null;
         if (repositoryRoots.Count > 0) cancellationToken.ThrowIfCancellationRequested();
         var selectedRepositoryRoots = repositoryRoots
-            .Distinct(PathComparer)
             .Select(Path.GetFullPath)
+            .Distinct(PathComparer)
             .Where(repositoryRoot => MatchesRepositoryFilter(repositoryRoot, options.RepositoryFilters))
             .ToArray();
         long cumulativeCandidateCount = 0;
@@ -56,7 +56,7 @@ public sealed class RepositoryScanner
             cancellationToken.ThrowIfCancellationRequested();
             var repositoryRoot = selectedRepositoryRoots[index];
             var current = index + 1;
-            progress.Report(new OperationProgressEvent(
+            ReportProgress(new OperationProgressEvent(
                 ProgressEventKind.RepositoryScanStarted,
                 operation,
                 Path: repositoryRoot,
@@ -394,7 +394,7 @@ public sealed class RepositoryScanner
         OperationWarning warning)
     {
         warnings.Add(warning);
-        progress.Report(new OperationProgressEvent(
+        ReportProgress(new OperationProgressEvent(
             ProgressEventKind.Warning,
             operation,
             Path: warning.Path,
@@ -411,7 +411,7 @@ public sealed class RepositoryScanner
         long estimatedBytes,
         long warningCount)
     {
-        progress.Report(new OperationProgressEvent(
+        ReportProgress(new OperationProgressEvent(
             ProgressEventKind.RepositoryScanCompleted,
             operation,
             Path: repositoryRoot,
@@ -423,6 +423,22 @@ public sealed class RepositoryScanner
             EstimatedBytes: estimatedBytes,
             WarningCount: warningCount));
     }
+
+    private void ReportProgress(OperationProgressEvent progressEvent)
+    {
+        try
+        {
+            progress.Report(progressEvent);
+        }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+        }
+    }
+
+    private static bool IsRecoverableProgressException(Exception exception) =>
+        exception is not OutOfMemoryException
+        and not StackOverflowException
+        and not AccessViolationException;
 
     private static bool ContainsVisibleContent(string candidateRelativePath, IReadOnlyList<string> visiblePaths)
     {

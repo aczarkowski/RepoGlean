@@ -166,7 +166,7 @@ public sealed class RepositoryDiscovery
             .Select(exclusion => Path.IsPathRooted(exclusion) ? Path.GetFullPath(exclusion) : exclusion.Replace('\\', '/'))
             .ToArray();
         var repositories = new HashSet<string>(PathComparer);
-        progress.Report(new OperationProgressEvent(
+        ReportProgress(new OperationProgressEvent(
             ProgressEventKind.DiscoveryStarted,
             operation,
             Roots: Array.AsReadOnly(requestedRoots.ToArray())));
@@ -228,7 +228,7 @@ public sealed class RepositoryDiscovery
                             var repository = Path.GetFullPath(path);
                             if (repositories.Add(repository))
                             {
-                                progress.Report(new OperationProgressEvent(
+                                ReportProgress(new OperationProgressEvent(
                                     ProgressEventKind.RepositoryFound,
                                     operation,
                                     Path: repository,
@@ -257,7 +257,7 @@ public sealed class RepositoryDiscovery
             }
         }
 
-        progress.Report(new OperationProgressEvent(
+        ReportProgress(new OperationProgressEvent(
             ProgressEventKind.DiscoveryCompleted,
             operation,
             RepositoryCount: repositories.Count));
@@ -321,12 +321,28 @@ public sealed class RepositoryDiscovery
         OperationWarning warning)
     {
         warnings.Add(warning);
-        progress.Report(new OperationProgressEvent(
+        ReportProgress(new OperationProgressEvent(
             ProgressEventKind.Warning,
             operation,
             Path: warning.Path,
             Message: warning.Message));
     }
+
+    private void ReportProgress(OperationProgressEvent progressEvent)
+    {
+        try
+        {
+            progress.Report(progressEvent);
+        }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+        }
+    }
+
+    private static bool IsRecoverableProgressException(Exception exception) =>
+        exception is not OutOfMemoryException
+        and not StackOverflowException
+        and not AccessViolationException;
 
     internal static bool IsSameOrDescendant(string path, string parent)
     {

@@ -37,6 +37,37 @@ public sealed class RepositoryDiscoveryTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_preserves_results_and_warnings_when_progress_reporting_fails()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repository"));
+        var missing = temporary.GetPath("missing");
+        var progress = new ThrowingProgress(new InvalidOperationException("injected progress failure"));
+        var discovery = new RepositoryDiscovery(new GitClient(), progress, ProgressOperation.Scan);
+
+        var result = await discovery.DiscoverAsync([repository.Path, missing]);
+
+        Assert.Equal([repository.Path], result.Repositories);
+        var warning = Assert.Single(result.Warnings);
+        Assert.Equal(missing, warning.Path);
+        Assert.Equal("Scan root does not exist or is not an accessible directory.", warning.Message);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_does_not_swallow_catastrophic_progress_failures()
+    {
+        using var temporary = new TemporaryDirectory();
+        var failure = new OutOfMemoryException("injected catastrophic progress failure");
+        var progress = new ThrowingProgress(failure);
+        var discovery = new RepositoryDiscovery(new GitClient(), progress, ProgressOperation.Scan);
+
+        var exception = await Assert.ThrowsAsync<OutOfMemoryException>(() =>
+            discovery.DiscoverAsync([temporary.Path]));
+
+        Assert.Same(failure, exception);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_finds_git_directories_worktrees_and_submodules()
     {
         using var temporary = new TemporaryDirectory();
@@ -257,4 +288,19 @@ public sealed class RepositoryDiscoveryTests
     {
         public DriveRootDiscoveryResult GetFixedDriveRoots() => new([root], warning is null ? [] : [warning]);
     }
+}
+
+internal sealed class ThrowingProgress(Exception failure) : IOperationProgress
+{
+    public void Report(OperationProgressEvent progressEvent) => throw failure;
+
+    public void Pause()
+    {
+    }
+
+    public void Resume()
+    {
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

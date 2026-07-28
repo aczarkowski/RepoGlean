@@ -41,6 +41,7 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
     private bool rendered;
     private bool paused;
     private bool disabled;
+    private bool writerDisabled;
     private bool disposed;
 
     public InteractiveProgressRenderer(
@@ -133,6 +134,13 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
         catch (OperationCanceledException) when (refreshCancellation.IsCancellationRequested)
         {
         }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+            lock (sync)
+            {
+                disabled = true;
+            }
+        }
     }
 
     private async Task FinishDisposalAsync()
@@ -140,16 +148,34 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
         try
         {
             await refreshTask;
-
-            lock (sync)
-            {
-                Clear();
-            }
         }
         finally
         {
-            await ticker.DisposeAsync();
-            refreshCancellation.Dispose();
+            try
+            {
+                lock (sync)
+                {
+                    Clear();
+                }
+            }
+            finally
+            {
+                try
+                {
+                    await ticker.DisposeAsync();
+                }
+                catch (Exception exception) when (IsRecoverableProgressException(exception))
+                {
+                    lock (sync)
+                    {
+                        disabled = true;
+                    }
+                }
+                finally
+                {
+                    refreshCancellation.Dispose();
+                }
+            }
         }
     }
 
@@ -172,14 +198,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
             previousRenderedWidth = content.Length;
             return true;
         }
-        catch (IOException)
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
         {
             disabled = true;
-            return false;
-        }
-        catch (ObjectDisposedException)
-        {
-            disabled = true;
+            writerDisabled = true;
             return false;
         }
     }
@@ -205,7 +227,7 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
         {
             return terminalWidthProvider();
         }
-        catch (Exception)
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
         {
             return null;
         }
@@ -213,20 +235,22 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
 
     private void Clear()
     {
-        if (disabled || previousRenderedWidth == 0) return;
+        if (writerDisabled || previousRenderedWidth == 0) return;
 
         try
         {
             writer.Write($"\r{new string(' ', previousRenderedWidth)}\r");
             previousRenderedWidth = 0;
         }
-        catch (IOException)
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
         {
             disabled = true;
-        }
-        catch (ObjectDisposedException)
-        {
-            disabled = true;
+            writerDisabled = true;
         }
     }
+
+    private static bool IsRecoverableProgressException(Exception exception) =>
+        exception is not OutOfMemoryException
+        and not StackOverflowException
+        and not AccessViolationException;
 }

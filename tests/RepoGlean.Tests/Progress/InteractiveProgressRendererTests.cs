@@ -117,10 +117,16 @@ public sealed class InteractiveProgressRendererTests
         Assert.DoesNotContain("my-api", writer.Snapshot, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task Report_disables_later_writes_after_writer_failure_without_throwing()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Report_disables_later_writes_after_recoverable_writer_failure_without_throwing(
+        bool invalidOperation)
     {
-        using var writer = new ThrowingTextWriter();
+        using var writer = new ThrowingTextWriter(
+            invalidOperation
+                ? new InvalidOperationException("Simulated writer state failure.")
+                : new IOException("Simulated write failure."));
         var ticker = new ManualProgressTicker();
         await using var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
 
@@ -139,6 +145,150 @@ public sealed class InteractiveProgressRendererTests
         await Task.Yield();
         Assert.Null(exception);
         Assert.Equal(1, writer.WriteAttemptCount);
+    }
+
+    [Fact]
+    public async Task Pause_disables_later_writes_after_recoverable_clear_failure_without_throwing()
+    {
+        using var writer = new ThrowingTextWriter(
+            new InvalidOperationException("Simulated clear failure."),
+            failOnAttempt: 2);
+        var ticker = new ManualProgressTicker();
+        await using var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Scan));
+
+        var exception = Record.Exception(() =>
+        {
+            renderer.Pause();
+            renderer.Resume();
+        });
+
+        Assert.Null(exception);
+        Assert.Equal(2, writer.WriteAttemptCount);
+    }
+
+    [Fact]
+    public async Task Resume_disables_later_writes_after_recoverable_render_failure_without_throwing()
+    {
+        using var writer = new ThrowingTextWriter(
+            new InvalidOperationException("Simulated resume failure."),
+            failOnAttempt: 3);
+        var ticker = new ManualProgressTicker();
+        await using var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Scan));
+        renderer.Pause();
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryFound,
+            ProgressOperation.Scan,
+            RepositoryCount: 1));
+
+        var exception = Record.Exception(() =>
+        {
+            renderer.Resume();
+            renderer.Report(new OperationProgressEvent(
+                ProgressEventKind.RepositoryFound,
+                ProgressOperation.Scan,
+                RepositoryCount: 2));
+        });
+
+        Assert.Null(exception);
+        Assert.Equal(3, writer.WriteAttemptCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_isolates_recoverable_final_clear_failure_and_still_disposes_ticker_once()
+    {
+        using var writer = new ThrowingTextWriter(
+            new InvalidOperationException("Simulated final clear failure."),
+            failOnAttempt: 2);
+        var ticker = new ManualProgressTicker();
+        var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Scan));
+
+        var firstException = await Record.ExceptionAsync(async () => await renderer.DisposeAsync());
+        var secondException = await Record.ExceptionAsync(async () => await renderer.DisposeAsync());
+
+        Assert.Null(firstException);
+        Assert.Null(secondException);
+        Assert.Equal(2, writer.WriteAttemptCount);
+        Assert.Equal(1, ticker.DisposeCount);
+    }
+
+    [Fact]
+    public async Task Report_does_not_swallow_catastrophic_writer_failure()
+    {
+        using var writer = new ThrowingTextWriter(
+            new OutOfMemoryException("Simulated catastrophic failure."));
+        var ticker = new ManualProgressTicker();
+        await using var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
+
+        var exception = Record.Exception(() => renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Scan)));
+
+        Assert.IsType<OutOfMemoryException>(exception);
+        Assert.Equal(1, writer.WriteAttemptCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_isolates_ticker_wait_failure_and_still_clears_and_disposes_once()
+    {
+        using var writer = new LockedStringWriter();
+        var ticker = new WaitFailingProgressTicker();
+        var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Scan));
+        var beforeFailure = writer.Snapshot;
+        var renderedWidth = "⠋ Discovering repositories • 0 found".Length;
+
+        ticker.FailWait();
+        await ticker.WaitFailureObserved.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var firstException = await Record.ExceptionAsync(async () => await renderer.DisposeAsync());
+        var secondException = await Record.ExceptionAsync(async () => await renderer.DisposeAsync());
+
+        Assert.Null(firstException);
+        Assert.Null(secondException);
+        Assert.Equal(
+            beforeFailure + $"\r{new string(' ', renderedWidth)}\r",
+            writer.Snapshot);
+        Assert.Equal(1, ticker.DisposeCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_isolates_ticker_disposal_failure_after_cancellation_and_clear()
+    {
+        using var writer = new LockedStringWriter();
+        var ticker = new DisposeFailingProgressTicker();
+        var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Scan));
+        var beforeDispose = writer.Snapshot;
+        var renderedWidth = "⠋ Discovering repositories • 0 found".Length;
+
+        var firstException = await Record.ExceptionAsync(async () => await renderer.DisposeAsync());
+        var secondException = await Record.ExceptionAsync(async () => await renderer.DisposeAsync());
+
+        Assert.Null(firstException);
+        Assert.Null(secondException);
+        Assert.True(ticker.WaitCancellationObserved);
+        Assert.Equal(
+            beforeDispose + $"\r{new string(' ', renderedWidth)}\r",
+            writer.Snapshot);
+        Assert.Equal(1, ticker.DisposeCount);
     }
 
     [Fact]
@@ -212,14 +362,21 @@ public sealed class InteractiveProgressRendererTests
         }
     }
 
-    private sealed class ThrowingTextWriter : StringWriter
+    private sealed class ThrowingTextWriter(
+        Exception exception,
+        int failOnAttempt = 1) : StringWriter
     {
         public int WriteAttemptCount { get; private set; }
 
         public override void Write(string? value)
         {
             WriteAttemptCount++;
-            throw new IOException("Simulated write failure.");
+            if (WriteAttemptCount == failOnAttempt)
+            {
+                throw exception;
+            }
+
+            base.Write(value);
         }
     }
 }
@@ -240,5 +397,59 @@ internal sealed class ManualProgressTicker : IProgressTicker
         DisposeCount++;
         ticks.Writer.TryComplete();
         return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WaitFailingProgressTicker : IProgressTicker
+{
+    private readonly TaskCompletionSource failWait =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource waitFailureObserved =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public int DisposeCount { get; private set; }
+
+    public Task WaitFailureObserved => waitFailureObserved.Task;
+
+    public void FailWait() => failWait.TrySetResult();
+
+    public async ValueTask<bool> WaitForNextTickAsync(CancellationToken cancellationToken)
+    {
+        await failWait.Task.WaitAsync(cancellationToken);
+        waitFailureObserved.TrySetResult();
+        throw new InvalidOperationException("Simulated ticker wait failure.");
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        DisposeCount++;
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class DisposeFailingProgressTicker : IProgressTicker
+{
+    public int DisposeCount { get; private set; }
+
+    public bool WaitCancellationObserved { get; private set; }
+
+    public async ValueTask<bool> WaitForNextTickAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return false;
+        }
+        finally
+        {
+            WaitCancellationObserved = cancellationToken.IsCancellationRequested;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        DisposeCount++;
+        return ValueTask.FromException(
+            new InvalidOperationException("Simulated ticker disposal failure."));
     }
 }

@@ -337,6 +337,16 @@ public static class RepoGleanApp
             .Where(candidate => includeOptIn || candidate.Preselected)
             .ToArray());
 
+    private static IReadOnlyList<ArtifactCandidate> CreatePlanCandidatePool(
+        IReadOnlyList<RepositoryScanResult> repositories,
+        bool includeDependencies) =>
+        Array.AsReadOnly(repositories
+            .SelectMany(repository => repository.Candidates)
+            .Where(candidate =>
+                includeDependencies ||
+                candidate.Category != ArtifactCategory.Dependency)
+            .ToArray());
+
     internal static OperationProgressEvent CreateCleanupTerminalEvent(
         ProgressEventKind kind,
         CleanupResult cleanup,
@@ -584,7 +594,9 @@ public static class RepoGleanApp
             var includeDependencies =
                 options.All ||
                 options.Categories.Contains(ArtifactCategory.Dependency);
-            var pool = FilterCandidates(scan.Repositories, includeDependencies);
+            var pool = CreatePlanCandidatePool(
+                scan.Repositories,
+                includeDependencies);
             var plan = ReclaimPlanner.Create(
                 pool,
                 options.FreeBytes!.Value,

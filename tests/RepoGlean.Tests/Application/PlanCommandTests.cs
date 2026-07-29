@@ -118,6 +118,98 @@ public sealed class PlanCommandTests
     }
 
     [Fact]
+    public async Task Plan_includes_custom_non_dependency_rules_without_all()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateCustomRuleRepositoryAsync(temporary.GetPath("repo"));
+        var configPath = WriteCustomRuleConfig(temporary.GetPath("config.json"));
+
+        var result = await RunAsync(
+            ["plan", repository.Path, "--free", "3B", "--config", configPath, "--format", "json"]);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var candidate = Assert.Single(document.RootElement
+            .GetProperty("plan")
+            .GetProperty("selectedCandidates")
+            .EnumerateArray());
+        Assert.Equal("company.custom-build", candidate.GetProperty("ruleId").GetString());
+        Assert.Equal("build", candidate.GetProperty("category").GetString());
+    }
+
+    [Fact]
+    public async Task Plan_includes_custom_non_dependency_rules_with_explicit_category_filter()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateCustomRuleRepositoryAsync(temporary.GetPath("repo"));
+        var configPath = WriteCustomRuleConfig(temporary.GetPath("config.json"));
+
+        var result = await RunAsync(
+        [
+            "plan",
+            repository.Path,
+            "--free",
+            "3B",
+            "--category",
+            "build",
+            "--config",
+            configPath,
+            "--format",
+            "json",
+        ]);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var candidate = Assert.Single(document.RootElement
+            .GetProperty("plan")
+            .GetProperty("selectedCandidates")
+            .EnumerateArray());
+        Assert.Equal("company.custom-build", candidate.GetProperty("ruleId").GetString());
+        Assert.Equal("build", candidate.GetProperty("category").GetString());
+    }
+
+    [Fact]
+    public async Task Plan_all_only_adds_dependencies_to_the_default_custom_rule_pool()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateCustomRuleRepositoryAsync(temporary.GetPath("repo"));
+        var configPath = WriteCustomRuleConfig(temporary.GetPath("config.json"));
+
+        var defaultResult = await RunAsync(
+            ["plan", repository.Path, "--free", "8B", "--config", configPath, "--format", "json"]);
+        var allResult = await RunAsync(
+            ["plan", repository.Path, "--free", "8B", "--all", "--config", configPath, "--format", "json"]);
+
+        Assert.Equal(3, defaultResult.ExitCode);
+        using (var document = JsonDocument.Parse(defaultResult.Stdout))
+        {
+            var candidates = document.RootElement
+                .GetProperty("plan")
+                .GetProperty("selectedCandidates")
+                .EnumerateArray()
+                .ToArray();
+            var candidate = Assert.Single(candidates);
+            Assert.Equal("company.custom-build", candidate.GetProperty("ruleId").GetString());
+            Assert.DoesNotContain(
+                candidates,
+                item => item.GetProperty("category").GetString() == "dependency");
+        }
+
+        Assert.Equal(0, allResult.ExitCode);
+        using (var document = JsonDocument.Parse(allResult.Stdout))
+        {
+            var candidates = document.RootElement
+                .GetProperty("plan")
+                .GetProperty("selectedCandidates")
+                .EnumerateArray()
+                .ToArray();
+            Assert.Equal(
+                ["company.custom-build", "company.custom-dependency"],
+                candidates.Select(candidate => candidate.GetProperty("ruleId").GetString()));
+        }
+    }
+
+    [Fact]
     public async Task Plan_uses_configured_roots_when_no_command_line_root_is_given()
     {
         using var temporary = new TemporaryDirectory();
@@ -210,6 +302,46 @@ public sealed class PlanCommandTests
             repository.GetPath("TestResults/result.bin"),
             ReferenceTime.AddDays(-40).UtcDateTime);
         return repository;
+    }
+
+    private static async Task<GitTestRepository> CreateCustomRuleRepositoryAsync(
+        string path)
+    {
+        var repository = await GitTestRepository.CreateAsync(path);
+        repository.Write("project.csproj", "<Project />");
+        repository.Write(
+            ".gitignore",
+            "custom-build/\ncustom-dependency/\n");
+        repository.WriteBytes("custom-build/artifact.bin", 3);
+        repository.WriteBytes("custom-dependency/package.bin", 5);
+        await repository.CommitAllAsync();
+        return repository;
+    }
+
+    private static string WriteCustomRuleConfig(string path)
+    {
+        File.WriteAllText(
+            path,
+            """
+            {
+              "schemaVersion": 1,
+              "customRules": [
+                {
+                  "id": "company.custom-build",
+                  "category": "Build",
+                  "patterns": ["custom-build", "custom-build/**"],
+                  "markers": ["project.csproj"]
+                },
+                {
+                  "id": "company.custom-dependency",
+                  "category": "Dependency",
+                  "patterns": ["custom-dependency", "custom-dependency/**"],
+                  "markers": ["project.csproj"]
+                }
+              ]
+            }
+            """);
+        return path;
     }
 
     private static async Task<AppResult> RunAsync(

@@ -1,6 +1,7 @@
 using RepoGlean.Cli;
 using RepoGlean.Cleaning;
 using RepoGlean.Configuration;
+using RepoGlean.Planning;
 using RepoGlean.Rules;
 using RepoGlean.Scanning;
 
@@ -53,7 +54,45 @@ public sealed record CleanupSummaryReport(
     long FailedCount,
     long EstimatedDeletedBytes,
     bool DryRun,
-    bool Interrupted);
+    bool Interrupted,
+    ReclaimTargetReport? ReclaimTarget = null);
+
+public sealed record PlanningCandidateReport(
+    string RepositoryRoot,
+    string AbsolutePath,
+    string RelativePath,
+    string RuleId,
+    string Category,
+    bool Preselected,
+    long FileCount,
+    long EstimatedBytes,
+    int? PlanningOrder,
+    int DisruptionTier,
+    string RecencyBand,
+    DateTimeOffset? NewestWriteTimeUtc,
+    string PlanningReason);
+
+public sealed record ReclaimPlanReport(
+    long RequestedBytes,
+    long EligibleBytes,
+    long PlannedBytes,
+    long OvershootBytes,
+    long ShortfallBytes,
+    bool TargetMet,
+    long SelectedCandidateCount,
+    long PreservedCandidateCount,
+    IReadOnlyList<PlanningCandidateReport> SelectedCandidates,
+    IReadOnlyList<PlanningCandidateReport> PreservedCandidates);
+
+public sealed record ReclaimTargetReport(
+    long RequestedBytes,
+    long PlannedBytes,
+    long ValidatedBytes,
+    long CompletedDeletionBytes,
+    long AchievedBytes,
+    long OvershootBytes,
+    long ShortfallBytes,
+    bool TargetMet);
 
 public sealed record ReportDocument(
     int SchemaVersion,
@@ -67,7 +106,8 @@ public sealed record ReportDocument(
     IReadOnlyList<RuleReport>? Rules = null,
     RepoGleanConfig? Configuration = null,
     string? ConfigurationPath = null,
-    CleanupSummaryReport? Cleanup = null)
+    CleanupSummaryReport? Cleanup = null,
+    ReclaimPlanReport? Plan = null)
 {
     public static ReportDocument FromScan(IReadOnlyList<string> effectiveRoots, ScanResult result)
     {
@@ -183,6 +223,55 @@ public sealed record ReportDocument(
                 result.IsInterrupted));
     }
 
+    public static ReportDocument FromPlan(
+        IReadOnlyList<string> effectiveRoots,
+        ReclaimPlan plan,
+        IReadOnlyList<OperationWarning> warnings)
+    {
+        ArgumentNullException.ThrowIfNull(effectiveRoots);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(warnings);
+        var allCandidates = plan.SelectedCandidates.Concat(plan.PreservedCandidates).ToArray();
+        var repositories = allCandidates
+            .GroupBy(item => item.Candidate.RepositoryRoot, PathComparer)
+            .OrderBy(group => group.Key, PathComparer)
+            .Select(group => new RepositoryReport(
+                group.Key,
+                Array.AsReadOnly(group.Select(item => ToCandidateReport(item.Candidate)).ToArray()),
+                group.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.FileCount)),
+                group.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.EstimatedBytes))))
+            .ToArray();
+        var reportWarnings = warnings
+            .Select(warning => new ReportMessage(warning.Path, warning.Message))
+            .ToArray();
+        var selected = plan.SelectedCandidates.Select(ToPlanningCandidateReport).ToArray();
+        var preserved = plan.PreservedCandidates.Select(ToPlanningCandidateReport).ToArray();
+        return new ReportDocument(
+            ReportSchema.CurrentVersion,
+            "plan",
+            reportWarnings.Length == 0 && plan.TargetMet ? "success" : "partial",
+            Array.AsReadOnly(effectiveRoots.ToArray()),
+            Array.AsReadOnly(repositories),
+            new ReportTotals(
+                repositories.LongLength,
+                allCandidates.LongLength,
+                allCandidates.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.FileCount)),
+                plan.EligibleBytes),
+            Array.AsReadOnly(reportWarnings),
+            [],
+            Plan: new ReclaimPlanReport(
+                plan.RequestedBytes,
+                plan.EligibleBytes,
+                plan.PlannedBytes,
+                plan.OvershootBytes,
+                plan.ShortfallBytes,
+                plan.TargetMet,
+                selected.LongLength,
+                preserved.LongLength,
+                Array.AsReadOnly(selected),
+                Array.AsReadOnly(preserved)));
+    }
+
     public static ReportDocument Failure(string operation, string message) =>
         Empty(operation) with
         {
@@ -216,7 +305,39 @@ public sealed record ReportDocument(
         Array.AsReadOnly(rule.Patterns.ToArray()),
         Array.AsReadOnly(rule.Markers.ToArray()));
 
+    private static CandidateReport ToCandidateReport(ArtifactCandidate candidate) => new(
+        candidate.AbsolutePath,
+        candidate.RelativePath,
+        candidate.RuleId,
+        FormatCategory(candidate.Category),
+        candidate.Preselected,
+        candidate.FileCount,
+        candidate.EstimatedBytes);
+
+    private static PlanningCandidateReport ToPlanningCandidateReport(ReclaimPlanCandidate candidate) => new(
+        candidate.Candidate.RepositoryRoot,
+        candidate.Candidate.AbsolutePath,
+        candidate.Candidate.RelativePath,
+        candidate.Candidate.RuleId,
+        FormatCategory(candidate.Candidate.Category),
+        candidate.Candidate.Preselected,
+        candidate.Candidate.FileCount,
+        candidate.Candidate.EstimatedBytes,
+        candidate.PlanningOrder,
+        candidate.DisruptionTier,
+        FormatRecencyBand(candidate.RecencyBand),
+        candidate.Candidate.NewestWriteTimeUtc,
+        candidate.PlanningReason);
+
     private static string FormatCategory(ArtifactCategory category) => category.ToString().ToLowerInvariant();
+
+    private static string FormatRecencyBand(ReclaimRecencyBand band) => band switch
+    {
+        ReclaimRecencyBand.Dormant => "dormant",
+        ReclaimRecencyBand.Stale => "stale",
+        ReclaimRecencyBand.RecentOrUnknown => "recent-or-unknown",
+        _ => throw new ArgumentOutOfRangeException(nameof(band)),
+    };
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }

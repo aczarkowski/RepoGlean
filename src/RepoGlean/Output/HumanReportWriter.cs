@@ -86,6 +86,49 @@ public static class HumanReportWriter
         }
     }
 
+    public static void WritePlan(ReportDocument report, TextWriter output, HumanReportOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(options);
+        var plan = report.Plan ?? throw new ArgumentException("The report does not contain a reclaim plan.", nameof(report));
+
+        if (!options.Quiet)
+        {
+            output.WriteLine($"Roots: {string.Join(", ", report.EffectiveRoots)}");
+        }
+
+        WriteHeading(output, "Reclaim plan", options.UseColor);
+        foreach (var candidate in plan.SelectedCandidates)
+        {
+            var order = candidate.PlanningOrder?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-";
+            output.WriteLine($"  {order}. {candidate.RelativePath} [{candidate.RuleId}; {candidate.Category}; recency={candidate.RecencyBand}; {FormatBytes(candidate.EstimatedBytes)}]");
+        }
+
+        if (!options.Quiet)
+        {
+            output.WriteLine($"Preserved candidates: {plan.PreservedCandidateCount}");
+            foreach (var candidate in plan.PreservedCandidates)
+            {
+                output.WriteLine($"  {candidate.RelativePath} [{candidate.RuleId}; {candidate.Category}; recency={candidate.RecencyBand}; {FormatBytes(candidate.EstimatedBytes)}]");
+            }
+
+            WriteMessages(output, "Warnings", report.Warnings, includeDetails: true);
+        }
+
+        output.WriteLine($"Target: {FormatBytes(plan.RequestedBytes)}");
+        output.WriteLine($"Planned: {FormatBytes(plan.PlannedBytes)}");
+        output.WriteLine($"Target met: {YesNo(plan.TargetMet)}");
+        if (plan.TargetMet)
+        {
+            output.WriteLine($"Overshoot: {FormatBytes(plan.OvershootBytes)}");
+        }
+        else
+        {
+            output.WriteLine($"Shortfall: {FormatBytes(plan.ShortfallBytes)}");
+        }
+    }
+
     public static void WriteCleanup(ReportDocument report, TextWriter output, bool quiet = false) =>
         WriteCleanup(report, output, new HumanReportOptions(false, quiet, false, false));
 

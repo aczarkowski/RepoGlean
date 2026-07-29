@@ -37,4 +37,15 @@ public sealed record CleanupResult(
     public long EstimatedDeletedBytes => Items
         .Where(item => item.DeletionCompleted)
         .Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.EstimatedBytes));
+
+    public long EstimatedValidatedBytes => Items
+        .Where(item =>
+            DryRun &&
+            item.Outcome == CleanupOutcome.Skipped &&
+            item.Message.StartsWith("Validated; dry run", StringComparison.Ordinal))
+        .Aggregate(
+            0L,
+            (total, item) => FileTreeAnalyzer.SaturatingAdd(
+                total,
+                item.Candidate.EstimatedBytes));
 }

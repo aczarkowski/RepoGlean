@@ -49,6 +49,7 @@ public sealed class CleanupServiceTests
         Assert.Equal(0, result.DeletedCount);
         Assert.Equal(1, result.SkippedCount);
         Assert.Equal(0, result.EstimatedDeletedBytes);
+        Assert.Equal(candidate.EstimatedBytes, result.EstimatedValidatedBytes);
         var events = AssertCandidateEvents(progress, candidate, dryRun: true);
         Assert.Equal(ProgressCandidateOutcome.Validated, events.Completed.Outcome);
         Assert.Equal(0, events.Completed.DeletedCount);

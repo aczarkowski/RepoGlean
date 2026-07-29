@@ -175,6 +175,237 @@ public sealed class ReclaimReportTests
         Assert.False(ordinaryJson.RootElement.GetProperty("cleanup").TryGetProperty("reclaimTarget", out _));
     }
 
+    [Fact]
+    public void Cleanup_target_uses_live_deletion_completion_as_achievement()
+    {
+        var plan = CreateMetPlan();
+        var candidate = plan.SelectedCandidates[0].Candidate;
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Deleted,
+                "Deleted.",
+                DeletionCompleted: true)],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            reclaimPlan: plan);
+
+        Assert.Equal("success", report.Status);
+        var target = Assert.IsType<ReclaimTargetReport>(report.Cleanup!.ReclaimTarget);
+        Assert.Equal(0, target.ValidatedBytes);
+        Assert.Equal(6, target.CompletedDeletionBytes);
+        Assert.Equal(6, target.AchievedBytes);
+        Assert.Equal(1, target.OvershootBytes);
+        Assert.Equal(0, target.ShortfallBytes);
+        Assert.True(target.TargetMet);
+    }
+
+    [Fact]
+    public void Cleanup_target_counts_post_deletion_failure_but_keeps_partial_status()
+    {
+        var plan = CreateMetPlan();
+        var candidate = plan.SelectedCandidates[0].Candidate;
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Failed,
+                "Payload deleted; empty quarantine cleanup failed.",
+                DeletionCompleted: true)],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            reclaimPlan: plan);
+
+        Assert.Equal("partial", report.Status);
+        var target = Assert.IsType<ReclaimTargetReport>(report.Cleanup!.ReclaimTarget);
+        Assert.Equal(6, target.CompletedDeletionBytes);
+        Assert.Equal(6, target.AchievedBytes);
+        Assert.True(target.TargetMet);
+        Assert.Single(report.Errors);
+    }
+
+    [Fact]
+    public void Cleanup_target_excludes_a_safety_skip_from_achievement()
+    {
+        var plan = CreateMetPlan();
+        var candidate = plan.SelectedCandidates[0].Candidate;
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Skipped,
+                "Candidate filesystem identity changed after the scan.")],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            reclaimPlan: plan);
+
+        Assert.Equal("partial", report.Status);
+        var target = Assert.IsType<ReclaimTargetReport>(report.Cleanup!.ReclaimTarget);
+        Assert.Equal(0, target.AchievedBytes);
+        Assert.Equal(5, target.ShortfallBytes);
+        Assert.False(target.TargetMet);
+        Assert.Single(report.Warnings);
+    }
+
+    [Fact]
+    public void Cleanup_target_excludes_a_failed_candidate_from_achievement()
+    {
+        var plan = CreateMetPlan();
+        var candidate = plan.SelectedCandidates[0].Candidate;
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Failed,
+                "Cleanup failed.")],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            reclaimPlan: plan);
+
+        Assert.Equal("partial", report.Status);
+        var target = Assert.IsType<ReclaimTargetReport>(report.Cleanup!.ReclaimTarget);
+        Assert.Equal(0, target.CompletedDeletionBytes);
+        Assert.Equal(0, target.AchievedBytes);
+        Assert.Equal(5, target.ShortfallBytes);
+        Assert.False(target.TargetMet);
+        Assert.Single(report.Errors);
+    }
+
+    [Fact]
+    public void Cleanup_target_interruption_uses_processed_achievement_and_preserves_status()
+    {
+        var plan = CreateMetPlan();
+        var cleanup = new CleanupResult(
+            [],
+            DryRun: false,
+            IsInterrupted: true,
+            SelectedCount: 1);
+
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            reclaimPlan: plan);
+
+        Assert.Equal("interrupted", report.Status);
+        var target = Assert.IsType<ReclaimTargetReport>(report.Cleanup!.ReclaimTarget);
+        Assert.Equal(0, target.AchievedBytes);
+        Assert.Equal(5, target.ShortfallBytes);
+        Assert.False(target.TargetMet);
+    }
+
+    [Fact]
+    public void Cleanup_target_is_partial_when_the_original_plan_had_a_shortfall()
+    {
+        var metPlan = CreateMetPlan();
+        var plan = metPlan with
+        {
+            RequestedBytes = 10,
+            PlannedBytes = 6,
+            OvershootBytes = 0,
+            ShortfallBytes = 4,
+            TargetMet = false,
+        };
+        var candidate = plan.SelectedCandidates[0].Candidate;
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Deleted,
+                "Deleted.",
+                DeletionCompleted: true)],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            reclaimPlan: plan);
+
+        Assert.Equal("partial", report.Status);
+        var target = Assert.IsType<ReclaimTargetReport>(report.Cleanup!.ReclaimTarget);
+        Assert.Equal(6, target.PlannedBytes);
+        Assert.Equal(6, target.AchievedBytes);
+        Assert.Equal(4, target.ShortfallBytes);
+        Assert.False(target.TargetMet);
+    }
+
+    [Fact]
+    public void Cleanup_target_met_with_an_unrelated_warning_remains_partial()
+    {
+        var plan = CreateMetPlan();
+        var candidate = plan.SelectedCandidates[0].Candidate;
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Deleted,
+                "Deleted.",
+                DeletionCompleted: true)],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            [new OperationWarning("/repos/warning", "warning detail")],
+            plan);
+
+        Assert.Equal("partial", report.Status);
+        Assert.True(report.Cleanup!.ReclaimTarget!.TargetMet);
+        Assert.Single(report.Warnings);
+    }
+
+    [Fact]
+    public void Human_cleanup_shows_the_authoritative_reclaim_target_block()
+    {
+        var plan = CreateMetPlan();
+        var candidate = plan.SelectedCandidates[0].Candidate;
+        var cleanup = new CleanupResult(
+            [new CleanupCandidateResult(
+                candidate,
+                CleanupOutcome.Deleted,
+                "Deleted.",
+                DeletionCompleted: true)],
+            DryRun: false,
+            IsInterrupted: false,
+            SelectedCount: 1);
+        var report = ReportDocument.FromCleanup(
+            ["/repos"],
+            cleanup,
+            reclaimPlan: plan);
+        using var output = new StringWriter();
+
+        HumanReportWriter.WriteCleanup(
+            report,
+            output,
+            new HumanReportOptions(false, false, false, false));
+
+        var text = output.ToString();
+        Assert.Contains("Reclaim target", text, StringComparison.Ordinal);
+        Assert.Contains("Planned: 6 B estimated", text, StringComparison.Ordinal);
+        Assert.Contains("Completed deletion: 6 B estimated", text, StringComparison.Ordinal);
+        Assert.Contains("Achieved: 6 B estimated", text, StringComparison.Ordinal);
+        Assert.Contains("Target met: yes", text, StringComparison.Ordinal);
+        Assert.Contains("Overshoot: 1 B estimated", text, StringComparison.Ordinal);
+    }
+
     private static ReportDocument CreateCleanupReport(ReclaimTargetReport reclaimTarget, bool dryRun) => new(
         ReportSchema.CurrentVersion,
         "clean",

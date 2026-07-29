@@ -156,6 +156,25 @@ public static class HumanReportWriter
         }
 
         var cleanup = report.Cleanup ?? new CleanupSummaryReport(0, 0, 0, 0, 0, false, false);
+        if (cleanup.ReclaimTarget is { } reclaimTarget)
+        {
+            WriteHeading(output, "Reclaim target", options.UseColor);
+            output.WriteLine($"Requested: {FormatBytes(reclaimTarget.RequestedBytes)}");
+            output.WriteLine($"Planned: {FormatBytes(reclaimTarget.PlannedBytes)}");
+            output.WriteLine($"Validated: {FormatBytes(reclaimTarget.ValidatedBytes)}");
+            output.WriteLine($"Completed deletion: {FormatBytes(reclaimTarget.CompletedDeletionBytes)}");
+            output.WriteLine($"Achieved: {FormatBytes(reclaimTarget.AchievedBytes)}");
+            output.WriteLine($"Target met: {YesNo(reclaimTarget.TargetMet)}");
+            if (reclaimTarget.TargetMet)
+            {
+                output.WriteLine($"Overshoot: {FormatBytes(reclaimTarget.OvershootBytes)}");
+            }
+            else
+            {
+                output.WriteLine($"Shortfall: {FormatBytes(reclaimTarget.ShortfallBytes)}");
+            }
+        }
+
         var prefix = cleanup.DryRun ? "Dry run" : "Cleanup";
         output.WriteLine(
             $"{prefix}: {cleanup.DeletedCount} deleted, {cleanup.SkippedCount} skipped, {cleanup.FailedCount} failed | " +

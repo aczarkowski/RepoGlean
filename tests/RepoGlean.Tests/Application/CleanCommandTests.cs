@@ -24,6 +24,14 @@ public sealed class CleanCommandTests
         Assert.False(Directory.Exists(second.GetPath("obj")));
         Assert.True(Directory.Exists(first.GetPath("node_modules")));
         Assert.True(Directory.Exists(second.GetPath("node_modules")));
+        Assert.Contains("Repositories:", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Select repositories [Enter=all]:", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Artifacts:", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains(
+            "Select artifacts [Enter=defaults, all=include dependencies]:",
+            result.Stdout,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Reclaim plan", result.Stdout, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -126,6 +134,230 @@ public sealed class CleanCommandTests
         Assert.Equal(0, all.ExitCode);
         Assert.False(Directory.Exists(allRepository.GetPath("obj")));
         Assert.False(Directory.Exists(allRepository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Reclaim_interactive_displays_the_fixed_plan_instead_of_selection_prompts()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--free", "5B"],
+            "delete\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Reclaim plan", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains($"{repository.Path}: obj", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains(
+            "Type delete to permanently remove 1 selected artifact(s):",
+            result.Stdout,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Repositories:", result.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Select repositories", result.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Artifacts:", result.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Select artifacts", result.Stdout, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(repository.GetPath("obj")));
+        Assert.True(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Theory]
+    [InlineData("DELETE")]
+    [InlineData("no")]
+    [InlineData("")]
+    public async Task Reclaim_interactive_confirmation_requires_literal_lowercase_delete(
+        string confirmation)
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--free", "5B"],
+            $"{confirmation}\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Reclaim plan", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Cleanup cancelled; nothing was deleted.", result.Stdout, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(repository.GetPath("obj")));
+        Assert.True(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Reclaim_yes_is_unattended_and_executes_only_the_planned_prefix()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--yes", "--free", "5B", "--format", "json"],
+            string.Empty);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var target = document.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
+        Assert.Equal(5, target.GetProperty("completedDeletionBytes").GetInt64());
+        Assert.True(target.GetProperty("targetMet").GetBoolean());
+        Assert.False(Directory.Exists(repository.GetPath("obj")));
+        Assert.True(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Reclaim_all_explicitly_adds_dependencies_to_the_planning_pool()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--yes", "--free", "12B", "--all", "--format", "json"],
+            string.Empty);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var target = document.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
+        Assert.Equal(12, target.GetProperty("plannedBytes").GetInt64());
+        Assert.Equal(12, target.GetProperty("completedDeletionBytes").GetInt64());
+        Assert.False(Directory.Exists(repository.GetPath("obj")));
+        Assert.False(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Reclaim_dependency_category_scopes_the_plan_to_dependencies()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            [
+                "clean",
+                repository.Path,
+                "--yes",
+                "--free",
+                "7B",
+                "--category",
+                "dependency",
+                "--format",
+                "json",
+            ],
+            string.Empty);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(Directory.Exists(repository.GetPath("obj")));
+        Assert.False(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Reclaim_dry_run_counts_validated_bytes_without_claiming_deletion()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--free", "5B", "--dry-run", "--format", "json"],
+            string.Empty);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var target = document.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
+        Assert.Equal(5, target.GetProperty("validatedBytes").GetInt64());
+        Assert.Equal(0, target.GetProperty("completedDeletionBytes").GetInt64());
+        Assert.Equal(5, target.GetProperty("achievedBytes").GetInt64());
+        Assert.True(target.GetProperty("targetMet").GetBoolean());
+        Assert.True(Directory.Exists(repository.GetPath("obj")));
+    }
+
+    [Fact]
+    public async Task Reclaim_cleanup_does_not_substitute_after_a_selected_candidate_changes()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--free", "5B", "--verbose"],
+            "delete\n",
+            beforeReadLine: lineNumber =>
+            {
+                if (lineNumber != 1) return;
+                Directory.Delete(repository.GetPath("obj"), recursive: true);
+                Directory.CreateDirectory(repository.GetPath("obj"));
+                File.WriteAllText(repository.GetPath("obj/replacement.bin"), "replacement");
+            });
+
+        Assert.Equal(3, result.ExitCode);
+        Assert.True(Directory.Exists(repository.GetPath("node_modules")));
+        Assert.Contains("Shortfall", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reclaim_planned_shortfall_remains_partial_after_the_whole_plan_is_deleted()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--yes", "--free", "20B", "--format", "json"],
+            string.Empty);
+
+        Assert.Equal(3, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("partial", document.RootElement.GetProperty("status").GetString());
+        var target = document.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
+        Assert.Equal(5, target.GetProperty("plannedBytes").GetInt64());
+        Assert.Equal(5, target.GetProperty("completedDeletionBytes").GetInt64());
+        Assert.Equal(15, target.GetProperty("shortfallBytes").GetInt64());
+        Assert.False(target.GetProperty("targetMet").GetBoolean());
+        Assert.False(Directory.Exists(repository.GetPath("obj")));
+        Assert.True(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Reclaim_target_met_with_an_unrelated_warning_still_returns_partial()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+        var missingRoot = temporary.GetPath("missing-root");
+
+        var result = await RunAsync(
+            [
+                "clean",
+                repository.Path,
+                missingRoot,
+                "--yes",
+                "--free",
+                "5B",
+                "--format",
+                "json",
+            ],
+            string.Empty);
+
+        Assert.Equal(3, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("partial", document.RootElement.GetProperty("status").GetString());
+        Assert.True(document.RootElement
+            .GetProperty("cleanup")
+            .GetProperty("reclaimTarget")
+            .GetProperty("targetMet")
+            .GetBoolean());
+        Assert.Equal(1, document.RootElement.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Reclaim_interruption_reports_the_fixed_plan_and_current_shortfall()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+        using var cancellation = new CancellationTokenSource();
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--free", "5B"],
+            "delete\n",
+            beforeReadLine: _ => cancellation.Cancel(),
+            cancellationToken: cancellation.Token);
+
+        Assert.Equal(130, result.ExitCode);
+        Assert.Contains("Reclaim target", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Achieved: 0 B estimated", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Shortfall: 5 B estimated", result.Stdout, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(repository.GetPath("obj")));
     }
 
     [Fact]

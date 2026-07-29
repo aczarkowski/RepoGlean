@@ -162,7 +162,8 @@ public sealed record ReportDocument(
     public static ReportDocument FromCleanup(
         IReadOnlyList<string> effectiveRoots,
         CleanupResult result,
-        IReadOnlyList<OperationWarning>? operationWarnings = null)
+        IReadOnlyList<OperationWarning>? operationWarnings = null,
+        ReclaimPlan? reclaimPlan = null)
     {
         ArgumentNullException.ThrowIfNull(effectiveRoots);
         ArgumentNullException.ThrowIfNull(result);
@@ -199,9 +200,40 @@ public sealed record ReportDocument(
             .Where(item => item.Outcome == CleanupOutcome.Failed)
             .Select(item => new ReportMessage(item.Candidate.AbsolutePath, item.Message))
             .ToArray();
+        ReclaimTargetReport? reclaimTarget = null;
+        if (reclaimPlan is not null)
+        {
+            var validatedBytes = result.EstimatedValidatedBytes;
+            var completedDeletionBytes = result.EstimatedDeletedBytes;
+            var achievedBytes = result.DryRun
+                ? validatedBytes
+                : completedDeletionBytes;
+            var targetMet = achievedBytes >= reclaimPlan.RequestedBytes;
+            reclaimTarget = new ReclaimTargetReport(
+                reclaimPlan.RequestedBytes,
+                reclaimPlan.PlannedBytes,
+                validatedBytes,
+                completedDeletionBytes,
+                achievedBytes,
+                targetMet
+                    ? SaturatingNonNegativeDifference(
+                        achievedBytes,
+                        reclaimPlan.RequestedBytes)
+                    : 0,
+                targetMet
+                    ? 0
+                    : SaturatingNonNegativeDifference(
+                        reclaimPlan.RequestedBytes,
+                        achievedBytes),
+                targetMet);
+        }
+
+        var hasReclaimShortfall =
+            reclaimPlan is not null &&
+            (!reclaimPlan.TargetMet || reclaimTarget is not { TargetMet: true });
         var status = result.IsInterrupted
             ? "interrupted"
-            : warnings.Length > 0 || errors.Length > 0
+            : warnings.Length > 0 || errors.Length > 0 || hasReclaimShortfall
                 ? "partial"
                 : "success";
         var selectedFileCount = result.Items.Aggregate(0L, (total, item) => FileTreeAnalyzer.SaturatingAdd(total, item.Candidate.FileCount));
@@ -222,7 +254,8 @@ public sealed record ReportDocument(
                 result.FailedCount,
                 result.EstimatedDeletedBytes,
                 result.DryRun,
-                result.IsInterrupted));
+                result.IsInterrupted,
+                reclaimTarget));
     }
 
     public static ReportDocument FromPlan(
@@ -340,6 +373,14 @@ public sealed record ReportDocument(
         ReclaimRecencyBand.RecentOrUnknown => "recent-or-unknown",
         _ => throw new ArgumentOutOfRangeException(nameof(band)),
     };
+
+    private static long SaturatingNonNegativeDifference(long minuend, long subtrahend)
+    {
+        if (minuend <= subtrahend) return 0;
+        if (subtrahend < 0 && minuend > long.MaxValue + subtrahend)
+            return long.MaxValue;
+        return minuend - subtrahend;
+    }
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }

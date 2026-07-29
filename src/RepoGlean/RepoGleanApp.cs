@@ -218,8 +218,44 @@ public static class RepoGleanApp
             var effectiveRoots = discovery.EffectiveRoots ?? roots;
             var availableRepositories = scan.Repositories.Where(repository => repository.Candidates.Count > 0).ToArray();
 
+            ReclaimPlan? reclaimPlan = null;
             IReadOnlyList<ArtifactCandidate> selectedCandidates;
-            if (!options.Yes && !options.DryRun && availableRepositories.Length > 0)
+            if (options.FreeBytes is not null)
+            {
+                var includeDependencies =
+                    options.All ||
+                    options.Categories.Contains(ArtifactCategory.Dependency);
+                var pool = CreatePlanCandidatePool(
+                    availableRepositories,
+                    includeDependencies);
+                reclaimPlan = ReclaimPlanner.Create(
+                    pool,
+                    options.FreeBytes.Value,
+                    runtime.UtcNowProvider?.Invoke() ?? DateTimeOffset.UtcNow);
+                selectedCandidates = Array.AsReadOnly(
+                    reclaimPlan.SelectedCandidates
+                        .Select(item => item.Candidate)
+                        .ToArray());
+
+                if (!options.Yes &&
+                    !options.DryRun &&
+                    options.OutputFormat == OutputFormat.Table)
+                {
+                    PauseProgress(progress);
+                    HumanReportWriter.WritePlan(
+                        ReportDocument.FromPlan(
+                            effectiveRoots,
+                            reclaimPlan,
+                            operationWarnings),
+                        stdout,
+                        new HumanReportOptions(
+                            Details: false,
+                            Quiet: options.Quiet,
+                            Verbose: options.Verbose,
+                            UseColor: runtime.IsOutputInteractive && !options.NoColor));
+                }
+            }
+            else if (!options.Yes && !options.DryRun && availableRepositories.Length > 0)
             {
                 PauseProgress(progress);
                 HumanReportWriter.WriteRepositorySelection(availableRepositories, stdout);
@@ -273,7 +309,11 @@ public static class RepoGleanApp
             var cleanup = await new CleanupService(git, progress: progress)
                 .ExecuteAsync(new CleanupRequest(selectedCandidates, effectiveRoots, ruleCatalog, options.DryRun), cancellationToken)
                 .ConfigureAwait(false);
-            var report = ReportDocument.FromCleanup(effectiveRoots, cleanup, operationWarnings);
+            var report = ReportDocument.FromCleanup(
+                effectiveRoots,
+                cleanup,
+                operationWarnings,
+                reclaimPlan);
             ReportProgress(
                 progress,
                 CreateCleanupTerminalEvent(
@@ -298,10 +338,7 @@ public static class RepoGleanApp
             }
 
             if (cleanup.IsInterrupted) return 130;
-            var hasSafetySkips = cleanup.Items.Any(item =>
-                item.Outcome == CleanupOutcome.Skipped &&
-                !IsValidatedDryRun(cleanup, item));
-            return cleanup.FailedCount > 0 || hasSafetySkips || operationWarnings.Length > 0 ? 3 : 0;
+            return report.Status == "success" ? 0 : 3;
         }
         catch (OperationCanceledException)
         {

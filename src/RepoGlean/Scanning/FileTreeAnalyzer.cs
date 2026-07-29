@@ -6,20 +6,30 @@ public sealed record FileTreeAnalysis(
     long EstimatedBytes,
     FileSystemIdentity? Identity,
     FileSystemIdentity? RepositoryIdentity,
-    IReadOnlyList<OperationWarning> Warnings);
+    IReadOnlyList<OperationWarning> Warnings,
+    DateTimeOffset? NewestWriteTimeUtc = null);
 
 public sealed class FileTreeAnalyzer
 {
     private readonly IFileSystemIdentityProvider identityProvider;
+    private readonly IFileTimestampProvider timestampProvider;
 
     public FileTreeAnalyzer()
-        : this(new FileSystemIdentityProvider())
+        : this(new FileSystemIdentityProvider(), new FileTimestampProvider())
     {
     }
 
     internal FileTreeAnalyzer(IFileSystemIdentityProvider identityProvider)
+        : this(identityProvider, new FileTimestampProvider())
+    {
+    }
+
+    internal FileTreeAnalyzer(
+        IFileSystemIdentityProvider identityProvider,
+        IFileTimestampProvider timestampProvider)
     {
         this.identityProvider = identityProvider;
+        this.timestampProvider = timestampProvider;
     }
 
     public FileTreeAnalysis Analyze(string path, string repositoryRoot, CancellationToken cancellationToken = default)
@@ -70,11 +80,21 @@ public sealed class FileTreeAnalyzer
             return new FileTreeAnalysis(false, 0, 0, identity, repositoryIdentity, warnings);
         }
 
+        var timestampUnavailable = false;
+        var newestWriteTimeUtc = ObserveTimestamp(timestampProvider, fullPath, null, ref timestampUnavailable);
+
         if ((identity.Attributes & FileAttributes.Directory) == 0)
         {
             try
             {
-                return new FileTreeAnalysis(true, 1, new FileInfo(fullPath).Length, identity, repositoryIdentity, warnings);
+                return new FileTreeAnalysis(
+                    true,
+                    1,
+                    new FileInfo(fullPath).Length,
+                    identity,
+                    repositoryIdentity,
+                    warnings,
+                    timestampUnavailable ? null : newestWriteTimeUtc);
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
@@ -96,6 +116,7 @@ public sealed class FileTreeAnalyzer
                 foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    newestWriteTimeUtc = ObserveTimestamp(timestampProvider, entry, newestWriteTimeUtc, ref timestampUnavailable);
                     if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase))
                     {
                         warnings.Add(new OperationWarning(entry, "Candidate contains a nested repository boundary."));
@@ -138,7 +159,29 @@ public sealed class FileTreeAnalyzer
             }
         }
 
-        return new FileTreeAnalysis(true, fileCount, estimatedBytes, identity, repositoryIdentity, warnings);
+        return new FileTreeAnalysis(
+            true,
+            fileCount,
+            estimatedBytes,
+            identity,
+            repositoryIdentity,
+            warnings,
+            timestampUnavailable ? null : newestWriteTimeUtc);
+    }
+
+    private static DateTimeOffset? ObserveTimestamp(
+        IFileTimestampProvider provider,
+        string path,
+        DateTimeOffset? newest,
+        ref bool timestampUnavailable)
+    {
+        if (!provider.TryGetLastWriteTimeUtc(path, out var observed))
+        {
+            timestampUnavailable = true;
+            return newest;
+        }
+
+        return newest is null || observed > newest.Value ? observed : newest;
     }
 
     private static bool IsSameMount(FileSystemIdentity left, FileSystemIdentity right) =>

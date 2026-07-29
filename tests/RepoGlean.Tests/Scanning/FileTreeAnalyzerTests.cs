@@ -7,6 +7,53 @@ namespace RepoGlean.Tests.Scanning;
 public sealed class FileTreeAnalyzerTests
 {
     [Fact]
+    public void Analyze_records_the_newest_root_or_descendant_write_time()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = temporary.GetPath("repo");
+        var candidate = Path.Combine(repository, "obj");
+        Directory.CreateDirectory(candidate);
+        File.WriteAllText(Path.Combine(candidate, "old.bin"), "old");
+        File.WriteAllText(Path.Combine(candidate, "new.bin"), "new");
+        var oldTime = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var newTime = oldTime.AddDays(1);
+        var timestamps = new StubTimestampProvider(new Dictionary<string, DateTimeOffset>
+        {
+            [Path.GetFullPath(candidate)] = oldTime,
+            [Path.GetFullPath(Path.Combine(candidate, "old.bin"))] = oldTime,
+            [Path.GetFullPath(Path.Combine(candidate, "new.bin"))] = newTime,
+        });
+        var analyzer = new FileTreeAnalyzer(new FileSystemIdentityProvider(), timestamps);
+
+        var result = analyzer.Analyze(candidate, repository);
+
+        Assert.True(result.IsSafe);
+        Assert.Equal(newTime, result.NewestWriteTimeUtc);
+    }
+
+    [Fact]
+    public void Analyze_uses_null_when_any_timestamp_is_unavailable()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = temporary.GetPath("repo");
+        var candidate = Path.Combine(repository, "obj");
+        Directory.CreateDirectory(candidate);
+        var missingTimestamp = Path.Combine(candidate, "artifact.bin");
+        File.WriteAllText(missingTimestamp, "payload");
+        var timestamps = new StubTimestampProvider(
+            new Dictionary<string, DateTimeOffset>
+            {
+                [Path.GetFullPath(candidate)] = DateTimeOffset.UnixEpoch,
+            });
+        var analyzer = new FileTreeAnalyzer(new FileSystemIdentityProvider(), timestamps);
+
+        var result = analyzer.Analyze(candidate, repository);
+
+        Assert.True(result.IsSafe);
+        Assert.Null(result.NewestWriteTimeUtc);
+    }
+
+    [Fact]
     public void Analyze_captures_replacement_resistant_volume_and_file_identity()
     {
         using var temporary = new TemporaryDirectory();
@@ -135,5 +182,12 @@ public sealed class FileTreeAnalyzerTests
             identity = fileIdentity is null ? null : new FileSystemMountIdentity(fileIdentity.VolumeId, fileIdentity.MountId);
             return identity is not null;
         }
+    }
+
+    private sealed class StubTimestampProvider(
+        IReadOnlyDictionary<string, DateTimeOffset> values) : IFileTimestampProvider
+    {
+        public bool TryGetLastWriteTimeUtc(string path, out DateTimeOffset value) =>
+            values.TryGetValue(Path.GetFullPath(path), out value);
     }
 }

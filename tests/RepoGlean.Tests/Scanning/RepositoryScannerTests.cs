@@ -12,6 +12,26 @@ namespace RepoGlean.Tests.Scanning;
 public sealed class RepositoryScannerTests
 {
     [Fact]
+    public async Task ScanAsync_propagates_the_newest_artifact_write_time()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write("project.csproj", "<Project />");
+        repository.Write(".gitignore", "obj/\n");
+        repository.Write("obj/artifact.bin", "payload");
+        await repository.CommitAllAsync();
+        var expected = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        var candidatePath = repository.GetPath("obj");
+        File.SetLastWriteTimeUtc(repository.GetPath("obj/artifact.bin"), expected.UtcDateTime.AddDays(-1));
+        File.SetLastWriteTimeUtc(candidatePath, expected.UtcDateTime);
+
+        var result = await ScanAsync(new GitClient(), repository);
+
+        var candidate = Assert.Single(result.Repositories.Single().Candidates);
+        Assert.Equal(expected, candidate.NewestWriteTimeUtc);
+    }
+
+    [Fact]
     public async Task ScanAsync_reports_truthful_repository_progress_and_matching_warnings()
     {
         using var temporary = new TemporaryDirectory();

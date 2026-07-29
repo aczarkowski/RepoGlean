@@ -21,7 +21,8 @@ public sealed record ArtifactCandidate(
     long FileCount,
     long EstimatedBytes,
     FileSystemIdentity Identity,
-    FileSystemIdentity RepositoryIdentity);
+    FileSystemIdentity RepositoryIdentity,
+    DateTimeOffset? NewestWriteTimeUtc = null);
 
 public sealed record RepositoryScanResult(
     string RepositoryRoot,

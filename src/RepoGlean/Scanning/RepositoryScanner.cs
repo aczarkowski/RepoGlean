@@ -384,7 +384,8 @@ public sealed class RepositoryScanner
                     analysis.FileCount,
                     analysis.EstimatedBytes,
                     analysis.Identity,
-                    analysis.RepositoryIdentity));
+                    analysis.RepositoryIdentity,
+                    analysis.NewestWriteTimeUtc));
             }
         }
     }

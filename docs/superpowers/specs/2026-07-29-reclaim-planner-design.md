@@ -267,7 +267,8 @@ Target met:                         no
 
 Interactive `clean --free` prints the recommendation before confirmation. Its
 final cleanup report remains authoritative and distinguishes planned bytes
-from estimated bytes whose payload deletion completed.
+from estimated bytes safety-validated by a dry run and estimated bytes whose
+payload deletion completed during live cleanup.
 
 Progress uses planning terminology. It may report eligible and planned
 candidate counts and bytes, but it never describes bytes as reclaimed before
@@ -301,9 +302,12 @@ version 1.
 
 When `clean --free` uses JSON, stdout still contains exactly one cleanup
 document. Its `cleanup` object adds an optional reclaim-target section
-containing requested, planned, completed-deletion, overshoot or shortfall, and
-target-met values. That section is absent for ordinary cleanup, preserving its
-existing shape.
+containing requested, planned, validated, completed-deletion, achieved,
+overshoot or shortfall, and target-met values. For a dry run, achieved bytes
+are the estimated bytes of candidates that completed safety validation. For
+live cleanup, achieved bytes are the estimated bytes of candidates whose
+payload deletion completed. That section is absent for ordinary cleanup,
+preserving its existing shape.
 
 Verbose narration remains on stderr. Compact progress remains disabled for
 JSON unless the user explicitly requests verbose narration under the existing
@@ -319,7 +323,8 @@ contract:
 - exit `2` for a missing, zero, negative, malformed, or incompatible
   `--free` value, or invalid configuration;
 - exit `3` and `status: "partial"` when a valid plan cannot meet the target,
-  or completed cleanup finishes below the target;
+  a dry run safety-validates less than the target, or live cleanup finishes
+  below the target;
 - exit `1` for a fatal operational failure;
 - exit `130` for interruption.
 
@@ -332,6 +337,11 @@ deletion completed under the existing cleanup result contract. A later empty
 quarantine cleanup failure may still leave `deletionCompleted: true`; those
 bytes count toward the target just as they count toward
 `estimatedDeletedBytes`.
+
+For a dry run, validated bytes include only candidates with the existing
+successful `Validated; dry run` outcome. Safety skips and failures do not
+count. This lets a successful dry run report that the proposed selection would
+meet the target without claiming that any space was actually reclaimed.
 
 A positive target with no eligible candidates is a valid shortfall result and
 therefore exits `3`, rather than using the ordinary no-candidates success
@@ -349,8 +359,8 @@ behavior.
 - Cleanup revalidates every selected candidate exactly as it does today.
 - A changed, unsafe, skipped, or failed candidate is reported but not replaced.
 - Interruption reports the fixed originally planned count, processed outcomes,
-  completed-deletion bytes, and current shortfall without treating unprocessed
-  candidates as deleted.
+  validated or completed-deletion bytes as appropriate, and current shortfall
+  without treating unprocessed candidates as achieved.
 - Renderer or progress-output failure retains the existing observational
   behavior and cannot alter planning, selection, cleanup, or status.
 
@@ -404,6 +414,7 @@ Cover:
 - dry-run validation;
 - JSON non-interactivity;
 - shortfall status and exit code;
+- dry-run target achievement using only successfully validated bytes;
 - cleanup skips and failures reducing completed bytes without substitution;
 - interruption before and during cleanup;
 - unchanged ordinary scan and clean behavior.

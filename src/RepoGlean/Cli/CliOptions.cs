@@ -3,6 +3,7 @@ namespace RepoGlean.Cli;
 public enum CommandKind
 {
     Scan,
+    Plan,
     Clean,
     RulesList,
     ConfigPath,
@@ -36,6 +37,7 @@ public sealed record CliOptions
         IReadOnlyList<ArtifactCategory> categories,
         IReadOnlyList<string> exclusions,
         long? minimumBytes,
+        long? freeBytes,
         bool allDrives,
         bool details,
         bool dryRun,
@@ -56,6 +58,7 @@ public sealed record CliOptions
         Categories = Freeze(categories);
         Exclusions = Freeze(exclusions);
         MinimumBytes = minimumBytes;
+        FreeBytes = freeBytes;
         AllDrives = allDrives;
         Details = details;
         DryRun = dryRun;
@@ -82,6 +85,8 @@ public sealed record CliOptions
     public IReadOnlyList<string> Exclusions { get; }
 
     public long? MinimumBytes { get; }
+
+    public long? FreeBytes { get; }
 
     public bool AllDrives { get; }
 

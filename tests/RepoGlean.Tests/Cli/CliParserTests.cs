@@ -36,6 +36,67 @@ public sealed class CliParserTests
         Assert.True(options.All);
     }
 
+    [Theory]
+    [InlineData("20GiB", 21_474_836_480L)]
+    [InlineData("5GB", 5_000_000_000L)]
+    public void Plan_requires_and_parses_a_positive_free_target(string value, long expected)
+    {
+        var result = CliParser.Parse(["plan", ".", "--free", value]);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(CommandKind.Plan, result.Value!.Command);
+        Assert.Equal(expected, result.Value.FreeBytes);
+    }
+
+    [Fact]
+    public void Plan_accepts_every_allowed_option()
+    {
+        var result = CliParser.Parse(["plan", "root", "--free", "1GiB", "--repo", "api", "--category", "build", "--exclude", "generated", "--min-size", "2MiB", "--format", "json", "--config", "config.json", "--all-drives", "--all", "--no-color", "--quiet", "--verbose", "--no-progress"]);
+
+        Assert.True(result.IsSuccess, result.Error);
+        var options = result.Value!;
+        Assert.Equal(CommandKind.Plan, options.Command);
+        Assert.Equal(["root"], options.Roots);
+        Assert.Equal(["api"], options.Repositories);
+        Assert.Equal([ArtifactCategory.Build], options.Categories);
+        Assert.Equal(["generated"], options.Exclusions);
+        Assert.Equal(2_097_152L, options.MinimumBytes);
+        Assert.Equal(1_073_741_824L, options.FreeBytes);
+        Assert.True(options.AllDrives);
+        Assert.True(options.All);
+        Assert.Equal(OutputFormat.Json, options.OutputFormat);
+        Assert.Equal("config.json", options.ConfigPath);
+        Assert.True(options.NoColor);
+        Assert.True(options.Quiet);
+        Assert.True(options.Verbose);
+        Assert.True(options.NoProgress);
+    }
+
+    [Theory]
+    [InlineData("plan", ".")]
+    [InlineData("plan", ".", "--free", "0")]
+    [InlineData("scan", ".", "--free", "1GiB")]
+    [InlineData("plan", ".", "--free", "1GiB", "--details")]
+    [InlineData("plan", ".", "--free", "1GiB", "--dry-run")]
+    [InlineData("plan", ".", "--free", "1GiB", "--yes")]
+    [InlineData("rules", "list", "--free", "1GiB")]
+    [InlineData("config", "path", "--free", "1GiB")]
+    [InlineData("help", "--free", "1GiB")]
+    [InlineData("version", "--free", "1GiB")]
+    public void Reclaim_option_matrix_rejects_invalid_invocations(params string[] arguments)
+    {
+        Assert.False(CliParser.Parse(arguments).IsSuccess);
+    }
+
+    [Fact]
+    public void Clean_yes_accepts_free_as_explicit_scope()
+    {
+        var result = CliParser.Parse(["clean", ".", "--yes", "--free", "1GiB"]);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(1_073_741_824L, result.Value!.FreeBytes);
+    }
+
     [Fact]
     public void Parse_rules_list_succeeds()
     {
@@ -143,7 +204,7 @@ public sealed class CliParserTests
         var repositories = new List<string> { "api" };
         var categories = new List<ArtifactCategory> { ArtifactCategory.Build };
         var exclusions = new List<string> { "generated" };
-        var options = new CliOptions(CommandKind.Scan, roots, repositories, categories, exclusions, null, false, false, false, false, false, OutputFormat.Table, false, null, false, false);
+        var options = new CliOptions(CommandKind.Scan, roots, repositories, categories, exclusions, null, null, false, false, false, false, false, OutputFormat.Table, false, null, false, false);
 
         roots.Add("other-root");
         repositories.Add("web");

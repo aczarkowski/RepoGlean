@@ -11,6 +11,7 @@ public static class CliParser
         CommandKind? command = null;
         var awaitingSubcommand = false;
         long? minimumBytes = null;
+        long? freeBytes = null;
         var allDrives = false;
         var details = false;
         var dryRun = false;
@@ -51,6 +52,11 @@ public static class CliParser
                         if (!TryReadValue(arguments, ref index, argument, out var minimumSize, out error)) return ParseResult<CliOptions>.Failure(error);
                         if (!ByteSizeParser.TryParse(minimumSize, out var parsedMinimumBytes)) return ParseResult<CliOptions>.Failure($"Invalid byte size '{minimumSize}'.");
                         minimumBytes = parsedMinimumBytes;
+                        break;
+                    case "--free":
+                        if (!TryReadValue(arguments, ref index, argument, out var freeSize, out error)) return ParseResult<CliOptions>.Failure(error);
+                        if (!ByteSizeParser.TryParse(freeSize, out var parsedFreeBytes)) return ParseResult<CliOptions>.Failure($"Invalid byte size '{freeSize}'.");
+                        freeBytes = parsedFreeBytes;
                         break;
                     case "--format":
                         if (!TryReadValue(arguments, ref index, argument, out var formatValue, out error)) return ParseResult<CliOptions>.Failure(error);
@@ -100,7 +106,7 @@ public static class CliParser
                 continue;
             }
 
-            if (command is CommandKind.Scan or CommandKind.Clean)
+            if (command is CommandKind.Scan or CommandKind.Plan or CommandKind.Clean)
             {
                 roots.Add(argument);
                 continue;
@@ -134,9 +140,14 @@ public static class CliParser
             return ParseResult<CliOptions>.Failure("--yes is only valid with clean.");
         }
 
-        if (command == CommandKind.Clean && yes && !all && repositories.Count == 0 && categories.Count == 0)
+        if (command == CommandKind.Plan && freeBytes is null)
         {
-            return ParseResult<CliOptions>.Failure("clean --yes requires --all, --repo, or --category.");
+            return ParseResult<CliOptions>.Failure("plan requires --free.");
+        }
+
+        if (command == CommandKind.Clean && yes && !all && repositories.Count == 0 && categories.Count == 0 && freeBytes is null)
+        {
+            return ParseResult<CliOptions>.Failure("clean --yes requires --all, --repo, --category, or --free.");
         }
 
         if (command == CommandKind.Clean && outputFormat == OutputFormat.Json && !yes && !dryRun)
@@ -151,6 +162,7 @@ public static class CliParser
             categories,
             exclusions,
             minimumBytes,
+            freeBytes,
             allDrives,
             details,
             dryRun,
@@ -186,6 +198,7 @@ public static class CliParser
         switch (value.ToLowerInvariant())
         {
             case "scan": command = CommandKind.Scan; return true;
+            case "plan": command = CommandKind.Plan; return true;
             case "clean": command = CommandKind.Clean; return true;
             case "rules": command = CommandKind.RulesList; awaitingSubcommand = true; return true;
             case "config": command = CommandKind.ConfigPath; awaitingSubcommand = true; return true;
@@ -246,8 +259,11 @@ public static class CliParser
         CommandKind.Scan => option is
             "--repo" or "--category" or "--exclude" or "--min-size" or "--format" or "--config" or
             "--all-drives" or "--details" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
+        CommandKind.Plan => option is
+            "--repo" or "--category" or "--exclude" or "--min-size" or "--free" or "--format" or "--config" or
+            "--all-drives" or "--all" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
         CommandKind.Clean => option is
-            "--repo" or "--category" or "--exclude" or "--min-size" or "--format" or "--config" or
+            "--repo" or "--category" or "--exclude" or "--min-size" or "--free" or "--format" or "--config" or
             "--all-drives" or "--dry-run" or "--yes" or "--all" or "--no-color" or "--quiet" or
             "--verbose" or "--no-progress",
         CommandKind.RulesList => option is "--format" or "--config",

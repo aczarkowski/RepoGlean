@@ -85,18 +85,25 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
     private static string FormatCompleted(OperationProgressEvent progressEvent) => progressEvent.Operation switch
     {
         ProgressOperation.Scan => $"Scan complete: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
+        ProgressOperation.Plan => $"Plan complete: {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")} selected, {ProgressText.FormatBytes(progressEvent.EstimatedBytes)} planned, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
         _ => $"Cleanup complete: {CleanupAggregate(progressEvent)}.",
     };
 
     private static string FormatInterrupted(OperationProgressEvent progressEvent) => progressEvent.Operation switch
     {
         ProgressOperation.Scan => $"Scan interrupted: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
+        ProgressOperation.Plan => $"Plan interrupted: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")}, {ProgressText.FormatBytes(progressEvent.EstimatedBytes)}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
         _ => $"Cleanup interrupted: {CleanupAggregate(progressEvent)}.",
     };
 
     private static string FormatFailed(OperationProgressEvent progressEvent)
     {
-        var operation = progressEvent.Operation == ProgressOperation.Scan ? "Scan" : "Cleanup";
+        var operation = progressEvent.Operation switch
+        {
+            ProgressOperation.Scan => "Scan",
+            ProgressOperation.Plan => "Plan",
+            _ => "Cleanup",
+        };
         return string.IsNullOrWhiteSpace(progressEvent.Message)
             ? $"{operation} failed."
             : $"{operation} failed: {ProgressText.Sanitize(progressEvent.Message)}";

@@ -6,6 +6,7 @@ using RepoGlean.Cleaning;
 using RepoGlean.Configuration;
 using RepoGlean.Git;
 using RepoGlean.Output;
+using RepoGlean.Planning;
 using RepoGlean.Progress;
 using RepoGlean.Rules;
 using RepoGlean.Scanning;
@@ -18,7 +19,8 @@ internal sealed record AppRuntime(
     bool IsErrorInteractive,
     bool IsOutputInteractive = false,
     IDriveRootProvider? DriveRootProvider = null,
-    Func<int?>? ErrorWidthProvider = null)
+    Func<int?>? ErrorWidthProvider = null,
+    Func<DateTimeOffset>? UtcNowProvider = null)
 {
     public static AppRuntime Create(TextWriter stdout, TextWriter stderr) => Create(
         stdout,
@@ -139,6 +141,8 @@ public static class RepoGleanApp
                     return 0;
                 case CommandKind.Scan:
                     return await RunScanAsync(options, config, runtime, stdout, stderr, cancellationToken).ConfigureAwait(false);
+                case CommandKind.Plan:
+                    return await RunPlanAsync(options, config, runtime, stdout, stderr, cancellationToken).ConfigureAwait(false);
                 case CommandKind.Clean:
                     return await RunCleanAsync(options, config, runtime, input, stdout, stderr, cancellationToken).ConfigureAwait(false);
                 default:
@@ -513,7 +517,7 @@ public static class RepoGleanApp
         {
             ReportProgress(
                 progress,
-                progress.CreateScanInterruptedEvent());
+                progress.CreateReadOnlyInterruptedEvent(ProgressOperation.Scan));
             PauseProgress(progress);
             throw;
         }
@@ -524,6 +528,120 @@ public static class RepoGleanApp
                 new OperationProgressEvent(
                     ProgressEventKind.Failed,
                     ProgressOperation.Scan,
+                    Message: exception.Message));
+            PauseProgress(progress);
+            throw;
+        }
+    }
+
+    internal static async Task<int> RunPlanAsync(
+        CliOptions options,
+        RepoGleanConfig config,
+        AppRuntime runtime,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        await using var progress = new OperationProgressTracker(
+            ProgressReporterFactory.Create(
+                runtime.IsErrorInteractive,
+                options.OutputFormat,
+                options.Quiet,
+                options.Verbose,
+                options.NoProgress,
+                stderr,
+                runtime.ErrorWidthProvider ?? (() => null)));
+        try
+        {
+            var referenceTimeUtc =
+                runtime.UtcNowProvider?.Invoke() ??
+                DateTimeOffset.UtcNow;
+            var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
+            var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
+            var git = new GitClient(runtime.GitExecutable);
+            await git.GetVersionAsync(cancellationToken).ConfigureAwait(false);
+            var discoveryService = runtime.DriveRootProvider is null
+                ? new RepositoryDiscovery(git, progress, ProgressOperation.Plan)
+                : new RepositoryDiscovery(
+                    git,
+                    runtime.DriveRootProvider,
+                    progress,
+                    ProgressOperation.Plan);
+            var discovery = await discoveryService
+                .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
+                .ConfigureAwait(false);
+            var scan = await new RepositoryScanner(git, progress, ProgressOperation.Plan)
+                .ScanAsync(
+                    discovery.Repositories,
+                    RuleCatalog.Create(config),
+                    new ScanOptions(
+                        options.Repositories,
+                        options.Categories,
+                        exclusions,
+                        options.MinimumBytes),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var includeDependencies =
+                options.All ||
+                options.Categories.Contains(ArtifactCategory.Dependency);
+            var pool = FilterCandidates(scan.Repositories, includeDependencies);
+            var plan = ReclaimPlanner.Create(
+                pool,
+                options.FreeBytes!.Value,
+                referenceTimeUtc);
+            var warnings = discovery.Warnings.Concat(scan.Warnings).ToArray();
+            var report = ReportDocument.FromPlan(
+                discovery.EffectiveRoots ?? roots,
+                plan,
+                warnings);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Completed,
+                    ProgressOperation.Plan,
+                    RepositoryCount: report.Totals.RepositoryCount,
+                    CandidateCount: plan.SelectedCandidates.Count,
+                    EstimatedBytes: plan.PlannedBytes,
+                    WarningCount: report.Warnings.Count));
+            PauseProgress(progress);
+            if (options.OutputFormat == OutputFormat.Json)
+            {
+                await JsonReportWriter.WriteAsync(
+                    report,
+                    stdout,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                HumanReportWriter.WritePlan(
+                    report,
+                    stdout,
+                    new HumanReportOptions(
+                        Details: false,
+                        Quiet: options.Quiet,
+                        Verbose: options.Verbose,
+                        UseColor: runtime.IsOutputInteractive && !options.NoColor));
+            }
+
+            return report.Status == "partial" ? 3 : 0;
+        }
+        catch (OperationCanceledException)
+        {
+            ReportProgress(
+                progress,
+                progress.CreateReadOnlyInterruptedEvent(ProgressOperation.Plan));
+            PauseProgress(progress);
+            throw;
+        }
+        catch (Exception exception) when (IsOperationalException(exception))
+        {
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Failed,
+                    ProgressOperation.Plan,
                     Message: exception.Message));
             PauseProgress(progress);
             throw;
@@ -587,6 +705,7 @@ public static class RepoGleanApp
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine("  repoglean scan [root ...] [options]");
+        output.WriteLine("  repoglean plan [root ...] --free size [options]");
         output.WriteLine("  repoglean clean [root ...] [options]");
         output.WriteLine("  repoglean rules list [--format table|json] [--config path]");
         output.WriteLine("  repoglean config path|show|validate [--config path]");
@@ -595,6 +714,8 @@ public static class RepoGleanApp
         output.WriteLine("Scan options: --repo name --category value --exclude path --min-size size");
         output.WriteLine("              --all-drives --format table|json");
         output.WriteLine("Scan report:  --details (include candidate rows in the final scan report)");
+        output.WriteLine("Plan options: --free size --repo name --category value --exclude path");
+        output.WriteLine("              --min-size size --all-drives --all --format table|json");
         output.WriteLine("Clean options: --dry-run --yes --all (unattended --yes also requires a scope)");
         output.WriteLine("Console:      --quiet --no-color");
         output.WriteLine("Progress:     --verbose (milestones) --no-progress (disable animation)");

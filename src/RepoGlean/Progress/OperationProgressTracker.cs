@@ -18,24 +18,25 @@ internal sealed class OperationProgressTracker : IOperationProgress
     public void Report(OperationProgressEvent progressEvent)
     {
         ArgumentNullException.ThrowIfNull(progressEvent);
-        if (progressEvent.Operation == ProgressOperation.Scan)
+        if (progressEvent.Operation is ProgressOperation.Scan or ProgressOperation.Plan)
         {
             lock (sync)
             {
-                TrackScan(progressEvent);
+                TrackReadOnly(progressEvent);
             }
         }
 
         inner.Report(progressEvent);
     }
 
-    public OperationProgressEvent CreateScanInterruptedEvent()
+    public OperationProgressEvent CreateReadOnlyInterruptedEvent(
+        ProgressOperation operation)
     {
         lock (sync)
         {
             return new OperationProgressEvent(
                 ProgressEventKind.Interrupted,
-                ProgressOperation.Scan,
+                operation,
                 Current: completedRepositoryCount,
                 Total: repositoryTotal,
                 RepositoryCount: completedRepositoryCount,
@@ -51,7 +52,7 @@ internal sealed class OperationProgressTracker : IOperationProgress
 
     public ValueTask DisposeAsync() => inner.DisposeAsync();
 
-    private void TrackScan(OperationProgressEvent progressEvent)
+    private void TrackReadOnly(OperationProgressEvent progressEvent)
     {
         switch (progressEvent.Kind)
         {

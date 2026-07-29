@@ -10,6 +10,7 @@ internal enum ProgressMode
 internal enum ProgressOperation
 {
     Scan,
+    Plan,
     Clean,
 }
 

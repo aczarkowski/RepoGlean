@@ -87,6 +87,37 @@ public sealed class VerboseProgressRendererTests
     }
 
     [Fact]
+    public void Report_formats_plan_completion_interruption_and_failure_separately()
+    {
+        using var writer = new StringWriter();
+        var renderer = new VerboseProgressRenderer(writer);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Completed,
+            ProgressOperation.Plan,
+            CandidateCount: 2,
+            EstimatedBytes: 12,
+            WarningCount: 0));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Interrupted,
+            ProgressOperation.Plan,
+            RepositoryCount: 1,
+            CandidateCount: 3,
+            EstimatedBytes: 18,
+            WarningCount: 2));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Failed,
+            ProgressOperation.Plan,
+            Message: "Git was unavailable."));
+
+        AssertContainsInOrder(
+            writer.ToString(),
+            "Plan complete: 2 candidates selected, 12 B estimated planned, 0 warnings.",
+            "Plan interrupted: 1 repository, 3 candidates, 18 B estimated, 2 warnings.",
+            "Plan failed: Git was unavailable.");
+    }
+
+    [Fact]
     public void Report_removes_control_characters_from_event_supplied_text()
     {
         using var writer = new StringWriter { NewLine = "\r\n" };

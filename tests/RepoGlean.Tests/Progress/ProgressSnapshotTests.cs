@@ -47,6 +47,36 @@ public sealed class ProgressSnapshotTests
     }
 
     [Fact]
+    public void Apply_keeps_plan_discovery_and_scanning_factual_without_claiming_reclamation()
+    {
+        var discovering = new ProgressSnapshot()
+            .Apply(new OperationProgressEvent(
+                ProgressEventKind.DiscoveryStarted,
+                ProgressOperation.Plan))
+            .Apply(new OperationProgressEvent(
+                ProgressEventKind.RepositoryFound,
+                ProgressOperation.Plan,
+                Path: "/work/my-api",
+                RepositoryCount: 2));
+        var scanning = discovering
+            .Apply(new OperationProgressEvent(
+                ProgressEventKind.RepositoryScanStarted,
+                ProgressOperation.Plan,
+                Path: "/work/my-api",
+                Current: 1,
+                Total: 2,
+                CandidateCount: 3,
+                EstimatedBytes: 12));
+
+        Assert.Equal("Discovering repositories • 2 found", discovering.Format());
+        Assert.Equal(
+            "Scanning repositories 1/2 • 3 candidates • 12 B estimated",
+            scanning.Format());
+        Assert.DoesNotContain("reclaimed", discovering.Format(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("reclaimed", scanning.Format(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Apply_formats_permanent_cleanup_and_advances_bytes_only_for_deleted_outcomes()
     {
         var snapshot = new ProgressSnapshot()

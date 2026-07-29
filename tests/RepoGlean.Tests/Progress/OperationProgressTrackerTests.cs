@@ -6,7 +6,15 @@ namespace RepoGlean.Tests.Progress;
 public sealed class OperationProgressTrackerTests
 {
     [Fact]
-    public async Task Scan_interruption_uses_completed_scan_totals_without_regressing_to_discovery_or_start_values()
+    public Task Scan_interruption_uses_completed_scan_totals_without_regressing_to_discovery_or_start_values() =>
+        AssertReadOnlyInterruptionAsync(ProgressOperation.Scan);
+
+    [Fact]
+    public Task Plan_interruption_uses_completed_scan_totals_without_regressing_to_discovery_or_start_values() =>
+        AssertReadOnlyInterruptionAsync(ProgressOperation.Plan);
+
+    private static async Task AssertReadOnlyInterruptionAsync(
+        ProgressOperation operation)
     {
         var inner = new RecordingProgress();
         await using var tracker = new OperationProgressTracker(inner);
@@ -14,30 +22,30 @@ public sealed class OperationProgressTrackerTests
         {
             new OperationProgressEvent(
                 ProgressEventKind.DiscoveryStarted,
-                ProgressOperation.Scan,
+                operation,
                 Roots: ["/work"]),
             new OperationProgressEvent(
                 ProgressEventKind.RepositoryFound,
-                ProgressOperation.Scan,
+                operation,
                 Path: "/work/first",
                 RepositoryCount: 1),
             new OperationProgressEvent(
                 ProgressEventKind.RepositoryFound,
-                ProgressOperation.Scan,
+                operation,
                 Path: "/work/second",
                 RepositoryCount: 2),
             new OperationProgressEvent(
                 ProgressEventKind.Warning,
-                ProgressOperation.Scan,
+                operation,
                 Path: "/work/unreadable",
                 Message: "Unable to inspect path."),
             new OperationProgressEvent(
                 ProgressEventKind.DiscoveryCompleted,
-                ProgressOperation.Scan,
+                operation,
                 RepositoryCount: 2),
             new OperationProgressEvent(
                 ProgressEventKind.RepositoryScanCompleted,
-                ProgressOperation.Scan,
+                operation,
                 Path: "/work/first",
                 Current: 1,
                 Total: 2,
@@ -45,7 +53,7 @@ public sealed class OperationProgressTrackerTests
                 EstimatedBytes: 50),
             new OperationProgressEvent(
                 ProgressEventKind.RepositoryScanStarted,
-                ProgressOperation.Scan,
+                operation,
                 Path: "/work/second",
                 Current: 2,
                 Total: 2,
@@ -53,17 +61,17 @@ public sealed class OperationProgressTrackerTests
                 EstimatedBytes: 0),
             new OperationProgressEvent(
                 ProgressEventKind.Warning,
-                ProgressOperation.Scan,
+                operation,
                 Path: "/work/second",
                 Message: "Second repository interrupted."),
         };
 
         foreach (var progressEvent in events) tracker.Report(progressEvent);
-        var interrupted = tracker.CreateScanInterruptedEvent();
+        var interrupted = tracker.CreateReadOnlyInterruptedEvent(operation);
 
         Assert.Equal(events, inner.Events);
         Assert.Equal(ProgressEventKind.Interrupted, interrupted.Kind);
-        Assert.Equal(ProgressOperation.Scan, interrupted.Operation);
+        Assert.Equal(operation, interrupted.Operation);
         Assert.Equal(1, interrupted.Current);
         Assert.Equal(2, interrupted.Total);
         Assert.Equal(1, interrupted.RepositoryCount);

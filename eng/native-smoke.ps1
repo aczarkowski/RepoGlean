@@ -114,13 +114,15 @@ try {
         $plan.plan.selectedCandidates[0].relativePath -ne "obj") {
         throw "Native reclaim plan returned an unexpected JSON result."
     }
+    $plannedBytes = [long]$plan.plan.plannedBytes
 
     $dryRun = Invoke-JsonCommand -Arguments @(
         "clean", $repository, "--free", "1B", "--dry-run",
         "--config", $configPath, "--format", "json", "--no-progress"
     )
     if (-not $dryRun.cleanup.reclaimTarget.targetMet -or
-        $dryRun.cleanup.reclaimTarget.validatedBytes -lt 1 -or
+        $dryRun.cleanup.reclaimTarget.validatedBytes -ne $plannedBytes -or
+        $dryRun.cleanup.reclaimTarget.achievedBytes -ne $plannedBytes -or
         $dryRun.cleanup.reclaimTarget.completedDeletionBytes -ne 0) {
         throw "Native reclaim dry run returned incorrect target accounting."
     }
@@ -135,8 +137,17 @@ try {
     if ($clean.operation -ne "clean" -or
         $clean.status -ne "success" -or
         -not $clean.cleanup.reclaimTarget.targetMet -or
-        $clean.cleanup.reclaimTarget.completedDeletionBytes -lt 1) {
+        $clean.cleanup.reclaimTarget.completedDeletionBytes -ne $plannedBytes -or
+        $clean.cleanup.reclaimTarget.achievedBytes -ne $plannedBytes) {
         throw "Native reclaim cleanup returned incorrect target accounting."
+    }
+    $cleanCandidates = @(
+        $clean.repositories |
+            ForEach-Object { $_.candidates } |
+            ForEach-Object { $_ }
+    )
+    if ($cleanCandidates.Count -ne 1 -or -not $cleanCandidates[0].deletionCompleted) {
+        throw "Native reclaim cleanup did not complete deletion for exactly one planned candidate."
     }
 
     if (Test-Path -LiteralPath (Join-Path $repository "obj")) { throw "Scoped cleanup left the selected build artifact behind." }

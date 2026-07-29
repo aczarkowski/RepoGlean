@@ -198,6 +198,9 @@ public static class RepoGleanApp
         var selectedCount = 0;
         try
         {
+            var reclaimReferenceTimeUtc = options.FreeBytes is null
+                ? (DateTimeOffset?)null
+                : runtime.UtcNowProvider?.Invoke() ?? DateTimeOffset.UtcNow;
             var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
             var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
             var git = new GitClient(runtime.GitExecutable);
@@ -231,7 +234,7 @@ public static class RepoGleanApp
                 reclaimPlan = ReclaimPlanner.Create(
                     pool,
                     options.FreeBytes.Value,
-                    runtime.UtcNowProvider?.Invoke() ?? DateTimeOffset.UtcNow);
+                    reclaimReferenceTimeUtc!.Value);
                 selectedCandidates = Array.AsReadOnly(
                     reclaimPlan.SelectedCandidates
                         .Select(item => item.Candidate)
@@ -291,23 +294,46 @@ public static class RepoGleanApp
             }
 
             selectedCount = selectedCandidates.Count;
+            CleanupResult? cleanup = null;
             if (!options.Yes && !options.DryRun && selectedCandidates.Count > 0)
             {
                 PauseProgress(progress);
                 await stdout.WriteAsync($"Type delete to permanently remove {selectedCandidates.Count} selected artifact(s): ").ConfigureAwait(false);
-                var confirmation = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-                if (!string.Equals(confirmation, "delete", StringComparison.Ordinal))
+                string? confirmation = null;
+                try
                 {
-                    PauseProgress(progress);
-                    await stdout.WriteLineAsync("Cleanup cancelled; nothing was deleted.").ConfigureAwait(false);
-                    return 0;
+                    confirmation = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (reclaimPlan is not null)
+                {
+                    cleanup = new CleanupResult(
+                        [],
+                        DryRun: false,
+                        IsInterrupted: true,
+                        SelectedCount: selectedCandidates.Count);
                 }
 
-                ResumeProgress(progress);
+                if (cleanup is null)
+                {
+                    if (!string.Equals(confirmation, "delete", StringComparison.Ordinal))
+                    {
+                        PauseProgress(progress);
+                        await stdout.WriteLineAsync("Cleanup cancelled; nothing was deleted.").ConfigureAwait(false);
+                        return 0;
+                    }
+
+                    ResumeProgress(progress);
+                }
             }
 
-            var cleanup = await new CleanupService(git, progress: progress)
-                .ExecuteAsync(new CleanupRequest(selectedCandidates, effectiveRoots, ruleCatalog, options.DryRun), cancellationToken)
+            cleanup ??= await new CleanupService(git, progress: progress)
+                .ExecuteAsync(
+                    new CleanupRequest(
+                        selectedCandidates,
+                        effectiveRoots,
+                        ruleCatalog,
+                        options.DryRun),
+                    cancellationToken)
                 .ConfigureAwait(false);
             var report = ReportDocument.FromCleanup(
                 effectiveRoots,
@@ -765,7 +791,7 @@ public static class RepoGleanApp
         output.WriteLine("Scan report:  --details (include candidate rows in the final scan report)");
         output.WriteLine("Plan options: --free size --repo name --category value --exclude path");
         output.WriteLine("              --min-size size --all-drives --all --format table|json");
-        output.WriteLine("Clean options: --dry-run --yes --all (unattended --yes also requires a scope)");
+        output.WriteLine("Clean options: --free size --dry-run --yes --all (unattended --yes also requires a scope)");
         output.WriteLine("Console:      --quiet --no-color");
         output.WriteLine("Progress:     --verbose (milestones) --no-progress (disable animation)");
     }

@@ -124,6 +124,7 @@ public sealed class EndToEndTests
         Assert.Equal(string.Empty, help.Stderr);
         Assert.Contains("repoglean plan [root ...] --free size [options]", help.Stdout, StringComparison.Ordinal);
         Assert.Contains("Plan options: --free size", help.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Clean options: --free size", help.Stdout, StringComparison.Ordinal);
 
         Assert.Equal(0, plan.ExitCode);
         Assert.Equal(string.Empty, plan.Stderr);
@@ -134,13 +135,15 @@ public sealed class EndToEndTests
         Assert.True(reclaimPlan.GetProperty("targetMet").GetBoolean());
         Assert.Equal(1, reclaimPlan.GetProperty("selectedCandidateCount").GetInt64());
         Assert.Equal("obj", reclaimPlan.GetProperty("selectedCandidates")[0].GetProperty("relativePath").GetString());
+        var plannedBytes = reclaimPlan.GetProperty("plannedBytes").GetInt64();
 
         Assert.Equal(0, dryRun.ExitCode);
         Assert.Equal(string.Empty, dryRun.Stderr);
         using var dryRunDocument = JsonDocument.Parse(dryRun.Stdout);
         var dryRunTarget = dryRunDocument.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
         Assert.True(dryRunTarget.GetProperty("targetMet").GetBoolean());
-        Assert.True(dryRunTarget.GetProperty("validatedBytes").GetInt64() >= 1);
+        Assert.Equal(plannedBytes, dryRunTarget.GetProperty("validatedBytes").GetInt64());
+        Assert.Equal(plannedBytes, dryRunTarget.GetProperty("achievedBytes").GetInt64());
         Assert.Equal(0, dryRunTarget.GetProperty("completedDeletionBytes").GetInt64());
         Assert.True(File.Exists(repository.GetPath("obj/artifact.bin")));
 
@@ -155,7 +158,15 @@ public sealed class EndToEndTests
         Assert.Equal("success", cleanDocument.RootElement.GetProperty("status").GetString());
         var cleanTarget = cleanDocument.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
         Assert.True(cleanTarget.GetProperty("targetMet").GetBoolean());
-        Assert.True(cleanTarget.GetProperty("completedDeletionBytes").GetInt64() >= 1);
+        Assert.Equal(plannedBytes, cleanTarget.GetProperty("completedDeletionBytes").GetInt64());
+        Assert.Equal(plannedBytes, cleanTarget.GetProperty("achievedBytes").GetInt64());
+        var cleanedCandidate = Assert.Single(cleanDocument.RootElement
+            .GetProperty("repositories")
+            .EnumerateArray()
+            .SelectMany(repositoryElement => repositoryElement
+                .GetProperty("candidates")
+                .EnumerateArray()));
+        Assert.True(cleanedCandidate.GetProperty("deletionCompleted").GetBoolean());
 
         Assert.False(Directory.Exists(repository.GetPath("obj")));
         Assert.True(File.Exists(repository.GetPath("node_modules/package.bin")));

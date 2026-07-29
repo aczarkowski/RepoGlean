@@ -73,8 +73,13 @@ public sealed class ReclaimReportTests
         Assert.Contains("Reclaim plan", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("Target:", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("Overshoot:", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Selected artifacts: 1", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("test", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("estimated", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "logical-size estimates, not physical reclaimed capacity",
+            output.ToString(),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -142,6 +147,11 @@ public sealed class ReclaimReportTests
         var text = output.ToString();
         Assert.Contains("TestResults", text, StringComparison.Ordinal);
         Assert.Contains("Target:", text, StringComparison.Ordinal);
+        Assert.Contains("Selected artifacts: 1", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "logical-size estimates, not physical reclaimed capacity",
+            text,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("Roots:", text, StringComparison.Ordinal);
         Assert.DoesNotContain("warning detail", text, StringComparison.Ordinal);
         Assert.DoesNotContain("obj", text, StringComparison.Ordinal);
@@ -289,7 +299,7 @@ public sealed class ReclaimReportTests
     }
 
     [Fact]
-    public void Cleanup_target_interruption_uses_processed_achievement_and_preserves_status()
+    public async Task Cleanup_target_interruption_serializes_fixed_selection_and_current_shortfall()
     {
         var plan = CreateMetPlan();
         var cleanup = new CleanupResult(
@@ -302,12 +312,25 @@ public sealed class ReclaimReportTests
             ["/repos"],
             cleanup,
             reclaimPlan: plan);
+        using var output = new StringWriter();
+
+        await JsonReportWriter.WriteAsync(report, output);
 
         Assert.Equal("interrupted", report.Status);
         var target = Assert.IsType<ReclaimTargetReport>(report.Cleanup!.ReclaimTarget);
         Assert.Equal(0, target.AchievedBytes);
         Assert.Equal(5, target.ShortfallBytes);
         Assert.False(target.TargetMet);
+        using var document = JsonDocument.Parse(output.ToString());
+        var root = document.RootElement;
+        Assert.Equal("interrupted", root.GetProperty("status").GetString());
+        var cleanupJson = root.GetProperty("cleanup");
+        Assert.Equal(1, cleanupJson.GetProperty("selectedCount").GetInt64());
+        Assert.True(cleanupJson.GetProperty("interrupted").GetBoolean());
+        var reclaimTarget = cleanupJson.GetProperty("reclaimTarget");
+        Assert.Equal(6, reclaimTarget.GetProperty("plannedBytes").GetInt64());
+        Assert.Equal(0, reclaimTarget.GetProperty("achievedBytes").GetInt64());
+        Assert.Equal(5, reclaimTarget.GetProperty("shortfallBytes").GetInt64());
     }
 
     [Fact]

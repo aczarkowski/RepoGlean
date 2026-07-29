@@ -120,6 +120,7 @@ public static class HumanReportWriter
             WriteMessages(output, "Warnings", report.Warnings, includeDetails: true);
         }
 
+        output.WriteLine($"Selected artifacts: {plan.SelectedCandidateCount}");
         output.WriteLine($"Target: {FormatBytes(plan.RequestedBytes)}");
         output.WriteLine($"Planned: {FormatBytes(plan.PlannedBytes)}");
         output.WriteLine($"Target met: {YesNo(plan.TargetMet)}");
@@ -131,6 +132,8 @@ public static class HumanReportWriter
         {
             output.WriteLine($"Shortfall: {FormatBytes(plan.ShortfallBytes)}");
         }
+
+        output.WriteLine("Reminder: values are logical-size estimates, not physical reclaimed capacity.");
     }
 
     public static void WriteCleanup(ReportDocument report, TextWriter output, bool quiet = false) =>

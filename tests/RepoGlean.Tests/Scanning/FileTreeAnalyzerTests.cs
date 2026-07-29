@@ -54,6 +54,65 @@ public sealed class FileTreeAnalyzerTests
     }
 
     [Fact]
+    public void Analyze_records_size_and_timestamp_for_a_file_candidate()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = temporary.GetPath("repo");
+        Directory.CreateDirectory(repository);
+        var candidate = Path.Combine(repository, "generated.bin");
+        File.WriteAllText(candidate, "data");
+        var expected = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero);
+        File.SetLastWriteTimeUtc(candidate, expected.UtcDateTime);
+
+        var result = new FileTreeAnalyzer().Analyze(candidate, repository);
+
+        Assert.True(result.IsSafe);
+        Assert.Equal(1, result.FileCount);
+        Assert.Equal(4, result.EstimatedBytes);
+        Assert.Equal(expected, result.NewestWriteTimeUtc);
+    }
+
+    [Fact]
+    public void Analyze_preserves_a_future_filesystem_timestamp_as_an_advisory_fact()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = temporary.GetPath("repo");
+        var candidate = Path.Combine(repository, "obj");
+        Directory.CreateDirectory(candidate);
+        var artifact = Path.Combine(candidate, "artifact.bin");
+        File.WriteAllText(artifact, "data");
+        var future = new DateTimeOffset(2036, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        File.SetLastWriteTimeUtc(artifact, future.UtcDateTime);
+        Directory.SetLastWriteTimeUtc(candidate, future.UtcDateTime);
+
+        var result = new FileTreeAnalyzer().Analyze(candidate, repository);
+
+        Assert.True(result.IsSafe);
+        Assert.Equal(future, result.NewestWriteTimeUtc);
+    }
+
+    [Fact]
+    public void Analyze_keeps_a_nested_mount_rejection_when_timestamps_are_unavailable()
+    {
+        using var temporary = new TemporaryDirectory();
+        var candidate = temporary.GetPath("candidate");
+        var nestedMount = Path.Combine(candidate, "nested-mount");
+        Directory.CreateDirectory(nestedMount);
+        File.WriteAllText(Path.Combine(nestedMount, "data.bin"), "data");
+        var analyzer = new FileTreeAnalyzer(
+            new TestIdentityProvider(nestedMount),
+            new StubTimestampProvider(new Dictionary<string, DateTimeOffset>()));
+
+        var result = analyzer.Analyze(candidate, temporary.Path);
+
+        Assert.False(result.IsSafe);
+        Assert.Null(result.NewestWriteTimeUtc);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == nestedMount &&
+            warning.Message.Contains("mount", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Analyze_captures_replacement_resistant_volume_and_file_identity()
     {
         using var temporary = new TemporaryDirectory();

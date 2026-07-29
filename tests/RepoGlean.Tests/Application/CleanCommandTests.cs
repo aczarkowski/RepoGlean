@@ -10,6 +10,9 @@ namespace RepoGlean.Tests.Application;
 
 public sealed class CleanCommandTests
 {
+    private static readonly DateTimeOffset ReferenceTime =
+        new(2026, 7, 29, 12, 0, 0, TimeSpan.Zero);
+
     [Fact]
     public async Task Interactive_defaults_select_all_repositories_but_only_preselected_artifacts()
     {
@@ -159,6 +162,37 @@ public sealed class CleanCommandTests
         Assert.DoesNotContain("Select artifacts", result.Stdout, StringComparison.Ordinal);
         Assert.False(Directory.Exists(repository.GetPath("obj")));
         Assert.True(Directory.Exists(repository.GetPath("node_modules")));
+    }
+
+    [Fact]
+    public async Task Reclaim_captures_one_reference_time_before_scanning_and_uses_it_at_the_stale_boundary()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+        var candidatePath = repository.GetPath("obj");
+        var artifactPath = repository.GetPath("obj/artifact.bin");
+        var staleBoundary = ReferenceTime.AddDays(-7);
+        var initiallyRecent = staleBoundary.AddSeconds(1);
+        File.SetLastWriteTimeUtc(artifactPath, initiallyRecent.UtcDateTime);
+        Directory.SetLastWriteTimeUtc(candidatePath, initiallyRecent.UtcDateTime);
+        var clockCaptures = 0;
+
+        var result = await RunAsync(
+            ["clean", repository.Path, "--free", "5B"],
+            "no\n",
+            utcNowProvider: () =>
+            {
+                clockCaptures++;
+                File.SetLastWriteTimeUtc(artifactPath, staleBoundary.UtcDateTime);
+                Directory.SetLastWriteTimeUtc(candidatePath, staleBoundary.UtcDateTime);
+                return ReferenceTime;
+            });
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, clockCaptures);
+        Assert.Contains("recency=stale", result.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("recency=recent-or-unknown", result.Stdout, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(candidatePath));
     }
 
     [Theory]
@@ -357,6 +391,27 @@ public sealed class CleanCommandTests
         Assert.Contains("Reclaim target", result.Stdout, StringComparison.Ordinal);
         Assert.Contains("Achieved: 0 B estimated", result.Stdout, StringComparison.Ordinal);
         Assert.Contains("Shortfall: 5 B estimated", result.Stdout, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(repository.GetPath("obj")));
+    }
+
+    [Fact]
+    public async Task Reclaim_confirmation_read_cancellation_renders_the_fixed_interrupted_cleanup()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
+        using var input = new CanceledValueTaskTextReader();
+
+        var result = await RunWithReaderAsync(
+            ["clean", repository.Path, "--free", "5B"],
+            input);
+
+        Assert.Equal(130, result.ExitCode);
+        Assert.Contains("Reclaim target", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Planned: 5 B estimated", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Achieved: 0 B estimated", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Shortfall: 5 B estimated", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("1 selected, 0 processed", result.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("Operation interrupted.", result.Stderr, StringComparison.Ordinal);
         Assert.True(Directory.Exists(repository.GetPath("obj")));
     }
 
@@ -617,14 +672,36 @@ public sealed class CleanCommandTests
         bool isErrorInteractive = false,
         string gitExecutable = "git",
         Action<int>? beforeReadLine = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<DateTimeOffset>? utcNowProvider = null)
     {
         using var input = beforeReadLine is null
             ? new StringReader(inputText)
             : new CallbackTextReader(inputText, beforeReadLine);
+        return await RunWithReaderAsync(
+            arguments,
+            input,
+            isErrorInteractive,
+            gitExecutable,
+            cancellationToken,
+            utcNowProvider);
+    }
+
+    private static async Task<AppResult> RunWithReaderAsync(
+        string[] arguments,
+        TextReader input,
+        bool isErrorInteractive = false,
+        string gitExecutable = "git",
+        CancellationToken cancellationToken = default,
+        Func<DateTimeOffset>? utcNowProvider = null)
+    {
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        var runtime = new AppRuntime(gitExecutable, Path.GetTempPath(), isErrorInteractive);
+        var runtime = new AppRuntime(
+            gitExecutable,
+            Path.GetTempPath(),
+            isErrorInteractive,
+            UtcNowProvider: utcNowProvider);
         var exitCode = await RepoGleanApp.RunAsync(arguments, input, stdout, stderr, runtime, cancellationToken);
         return new AppResult(exitCode, stdout.ToString(), stderr.ToString());
     }
@@ -722,6 +799,17 @@ public sealed class CleanCommandTests
             beforeReadLine(lineNumber);
             return ValueTask.FromResult(ReadLine());
         }
+    }
+
+    private sealed class CanceledValueTaskTextReader : StringReader
+    {
+        public CanceledValueTaskTextReader()
+            : base(string.Empty)
+        {
+        }
+
+        public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromCanceled<string?>(new CancellationToken(canceled: true));
     }
 
     private sealed class WriteLedger

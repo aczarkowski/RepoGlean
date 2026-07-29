@@ -103,9 +103,40 @@ try {
         throw "Native scan did not report both build and dependency fixtures."
     }
 
-    $clean = Invoke-JsonCommand -Arguments @("clean", $repository, "--yes", "--category", "build", "--config", $configPath, "--format", "json", "--no-progress")
-    if ($clean.operation -ne "clean" -or $clean.status -ne "success" -or $clean.cleanup.deletedCount -ne 1) {
-        throw "Native scoped cleanup returned an unexpected JSON result."
+    $plan = Invoke-JsonCommand -Arguments @(
+        "plan", $repository, "--free", "1B",
+        "--config", $configPath, "--format", "json", "--no-progress"
+    )
+    if ($plan.operation -ne "plan" -or
+        $plan.status -ne "success" -or
+        -not $plan.plan.targetMet -or
+        $plan.plan.selectedCandidateCount -ne 1 -or
+        $plan.plan.selectedCandidates[0].relativePath -ne "obj") {
+        throw "Native reclaim plan returned an unexpected JSON result."
+    }
+
+    $dryRun = Invoke-JsonCommand -Arguments @(
+        "clean", $repository, "--free", "1B", "--dry-run",
+        "--config", $configPath, "--format", "json", "--no-progress"
+    )
+    if (-not $dryRun.cleanup.reclaimTarget.targetMet -or
+        $dryRun.cleanup.reclaimTarget.validatedBytes -lt 1 -or
+        $dryRun.cleanup.reclaimTarget.completedDeletionBytes -ne 0) {
+        throw "Native reclaim dry run returned incorrect target accounting."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $repository "obj"))) {
+        throw "Native reclaim dry run deleted the build artifact."
+    }
+
+    $clean = Invoke-JsonCommand -Arguments @(
+        "clean", $repository, "--free", "1B", "--yes",
+        "--config", $configPath, "--format", "json", "--no-progress"
+    )
+    if ($clean.operation -ne "clean" -or
+        $clean.status -ne "success" -or
+        -not $clean.cleanup.reclaimTarget.targetMet -or
+        $clean.cleanup.reclaimTarget.completedDeletionBytes -lt 1) {
+        throw "Native reclaim cleanup returned incorrect target accounting."
     }
 
     if (Test-Path -LiteralPath (Join-Path $repository "obj")) { throw "Scoped cleanup left the selected build artifact behind." }

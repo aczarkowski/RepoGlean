@@ -104,6 +104,68 @@ public sealed class EndToEndTests
     }
 
     [Fact]
+    public async Task Built_executable_complete_reclaim_flow_preserves_repository_boundaries()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateRepositoryWithBuildAndDependencyAsync(temporary.GetPath("repo"), 23, 29);
+        repository.Write("tracked/keep.txt", "tracked");
+        await repository.CommitAllAsync("add tracked content");
+        repository.Write("unrelated/keep.txt", "untracked but not ignored");
+
+        var help = await RunExecutableAsync(["--help"]);
+        var plan = await RunExecutableAsync([
+            "plan", repository.Path, "--free", "1B", "--format", "json", "--no-progress",
+        ]);
+        var dryRun = await RunExecutableAsync([
+            "clean", repository.Path, "--free", "1B", "--dry-run", "--format", "json", "--no-progress",
+        ]);
+
+        Assert.Equal(0, help.ExitCode);
+        Assert.Equal(string.Empty, help.Stderr);
+        Assert.Contains("repoglean plan [root ...] --free size [options]", help.Stdout, StringComparison.Ordinal);
+        Assert.Contains("Plan options: --free size", help.Stdout, StringComparison.Ordinal);
+
+        Assert.Equal(0, plan.ExitCode);
+        Assert.Equal(string.Empty, plan.Stderr);
+        using var planDocument = JsonDocument.Parse(plan.Stdout);
+        Assert.Equal("plan", planDocument.RootElement.GetProperty("operation").GetString());
+        Assert.Equal("success", planDocument.RootElement.GetProperty("status").GetString());
+        var reclaimPlan = planDocument.RootElement.GetProperty("plan");
+        Assert.True(reclaimPlan.GetProperty("targetMet").GetBoolean());
+        Assert.Equal(1, reclaimPlan.GetProperty("selectedCandidateCount").GetInt64());
+        Assert.Equal("obj", reclaimPlan.GetProperty("selectedCandidates")[0].GetProperty("relativePath").GetString());
+
+        Assert.Equal(0, dryRun.ExitCode);
+        Assert.Equal(string.Empty, dryRun.Stderr);
+        using var dryRunDocument = JsonDocument.Parse(dryRun.Stdout);
+        var dryRunTarget = dryRunDocument.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
+        Assert.True(dryRunTarget.GetProperty("targetMet").GetBoolean());
+        Assert.True(dryRunTarget.GetProperty("validatedBytes").GetInt64() >= 1);
+        Assert.Equal(0, dryRunTarget.GetProperty("completedDeletionBytes").GetInt64());
+        Assert.True(File.Exists(repository.GetPath("obj/artifact.bin")));
+
+        var clean = await RunExecutableAsync([
+            "clean", repository.Path, "--free", "1B", "--yes", "--format", "json", "--no-progress",
+        ]);
+
+        Assert.Equal(0, clean.ExitCode);
+        Assert.Equal(string.Empty, clean.Stderr);
+        using var cleanDocument = JsonDocument.Parse(clean.Stdout);
+        Assert.Equal("clean", cleanDocument.RootElement.GetProperty("operation").GetString());
+        Assert.Equal("success", cleanDocument.RootElement.GetProperty("status").GetString());
+        var cleanTarget = cleanDocument.RootElement.GetProperty("cleanup").GetProperty("reclaimTarget");
+        Assert.True(cleanTarget.GetProperty("targetMet").GetBoolean());
+        Assert.True(cleanTarget.GetProperty("completedDeletionBytes").GetInt64() >= 1);
+
+        Assert.False(Directory.Exists(repository.GetPath("obj")));
+        Assert.True(File.Exists(repository.GetPath("node_modules/package.bin")));
+        Assert.Equal("tracked", File.ReadAllText(repository.GetPath("tracked/keep.txt")));
+        Assert.Equal("untracked but not ignored", File.ReadAllText(repository.GetPath("unrelated/keep.txt")));
+        Assert.True(Directory.Exists(repository.GetPath(".git")));
+        Assert.Empty(Directory.GetDirectories(repository.Path, ".repoglean-quarantine-*"));
+    }
+
+    [Fact]
     public async Task Built_executable_applies_cli_root_precedence_and_additive_exclusions()
     {
         using var temporary = new TemporaryDirectory();
@@ -284,10 +346,15 @@ public sealed class EndToEndTests
         Assert.Contains("narrat", readme, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("stderr", readme, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("--verbose --format json", readme, StringComparison.Ordinal);
+        Assert.Contains("repoglean plan", readme, StringComparison.Ordinal);
+        Assert.Contains("planner cannot authorize deletion", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("logical-size estimates", readme, StringComparison.Ordinal);
 
         var smoke = await File.ReadAllTextAsync(smokePath);
         Assert.Contains("ConvertFrom-Json", smoke, StringComparison.Ordinal);
         Assert.Contains("clean", smoke, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Native reclaim plan", smoke, StringComparison.Ordinal);
+        Assert.Contains("Native reclaim dry run", smoke, StringComparison.Ordinal);
 
         var ci = await File.ReadAllTextAsync(ciPath);
         var release = await File.ReadAllTextAsync(releasePath);

@@ -54,13 +54,14 @@ RepoGlean also calls the C library's `statx(2)` entry point and requires the ker
 
 ```text
 repoglean scan [root ...] [options]
+repoglean plan [root ...] --free size [options]
 repoglean clean [root ...] [options]
 repoglean rules list [--format table|json] [--config path]
 repoglean config path|show|validate [--config path]
 repoglean help | --help | version | --version
 ```
 
-With no arguments, RepoGlean prints help. `scan` never changes files. `clean --dry-run` performs the same discovery, filtering, selection, and safety validation as cleanup, but does not delete. Interactive cleanup selects repositories and artifacts, then requires the exact lowercase confirmation `delete`. Pressing Enter at the artifact prompt honors command-line opt-ins: `clean --all` includes dependency artifacts, and an explicit category such as `--category dependency` selects matching artifacts.
+With no arguments, RepoGlean prints help. `scan` and `plan` never change files. `plan` requires a positive `--free` target and recommends eligible artifacts estimated to meet it. `clean --free` uses that same fixed recommendation; without `--free`, existing cleanup behavior is unchanged. `clean --dry-run` performs the same discovery, filtering, selection, and safety validation as cleanup, but does not delete. Interactive cleanup requires the exact lowercase confirmation `delete`. Pressing Enter at the ordinary artifact prompt honors command-line opt-ins: `clean --all` includes dependency artifacts, and an explicit category such as `--category dependency` selects matching artifacts.
 
 ### Command-specific option matrix
 
@@ -68,22 +69,23 @@ Options outside the listed commands are usage errors with exit code 2.
 
 | Option | Allowed commands | Meaning |
 | --- | --- | --- |
-| `root ...` | `scan`, `clean` | Search these roots; positional and repeatable. |
-| `--repo name-or-path` | `scan`, `clean` | Include a repository by leaf name or full path; repeatable. |
-| `--category value` | `scan`, `clean` | Include `build`, `cache`, `test`, `ide`, or `dependency`; repeatable. Selecting `dependency` explicitly opts in dependency artifacts. |
-| `--exclude path-or-glob` | `scan`, `clean` | Add a root-relative path, absolute path, or repository-relative glob exclusion; repeatable. |
-| `--min-size size` | `scan`, `clean` | Require an estimated minimum size such as `500MB` or `2GiB`. |
-| `--all-drives` | `scan`, `clean` | Add accessible fixed-drive roots to the requested roots. |
+| `root ...` | `scan`, `plan`, `clean` | Search these roots; positional and repeatable. |
+| `--repo name-or-path` | `scan`, `plan`, `clean` | Include a repository by leaf name or full path; repeatable. |
+| `--category value` | `scan`, `plan`, `clean` | Include `build`, `cache`, `test`, `ide`, or `dependency`; repeatable. Selecting `dependency` explicitly opts in dependency artifacts. |
+| `--exclude path-or-glob` | `scan`, `plan`, `clean` | Add a root-relative path, absolute path, or repository-relative glob exclusion; repeatable. |
+| `--min-size size` | `scan`, `plan`, `clean` | Require an estimated minimum size such as `500MB` or `2GiB`. |
+| `--all-drives` | `scan`, `plan`, `clean` | Add accessible fixed-drive roots to the requested roots. |
 | `--details` | `scan` | Include candidate rows in the final scan report. |
+| `--free size` | `plan`, `clean` | Request a positive estimated reclaim target such as `5GB` or `20GiB`; required for `plan`. |
 | `--dry-run` | `clean` | Validate and report selected candidates without deletion or prompts. |
-| `--yes` | `clean` | Run unattended; requires an explicit `--all`, `--repo`, or `--category` scope. |
-| `--all` | `clean` | Include dependency artifacts as well as normally preselected categories. |
-| `--format value` | `scan`, `clean`, `rules list` | Select `table` or the versioned `json` document. |
-| `--config path` | `scan`, `clean`, `rules list`, `config path`, `config show`, `config validate` | Resolve or load an explicit configuration path. |
-| `--quiet` | `scan`, `clean` | Suppress progress, narration, and detailed report sections while retaining the summary and genuine errors. |
-| `--verbose` | `scan`, `clean` | Narrate meaningful operation stages on stderr and include detailed final diagnostics. |
-| `--no-color` | `scan`, `clean` | Disable ANSI styling; redirected and JSON output are never colored. |
-| `--no-progress` | `scan`, `clean` | Disable automatic interactive animation; explicit verbose milestones remain enabled. |
+| `--yes` | `clean` | Run unattended; requires an explicit `--free`, `--all`, `--repo`, or `--category` scope. |
+| `--all` | `plan`, `clean` | Explicitly include dependency artifacts in the planning or cleanup pool. |
+| `--format value` | `scan`, `plan`, `clean`, `rules list` | Select `table` or the versioned `json` document. |
+| `--config path` | `scan`, `plan`, `clean`, `rules list`, `config path`, `config show`, `config validate` | Resolve or load an explicit configuration path. |
+| `--quiet` | `scan`, `plan`, `clean` | Suppress progress, narration, and detailed report sections while retaining the summary and genuine errors. |
+| `--verbose` | `scan`, `plan`, `clean` | Narrate meaningful operation stages on stderr and include detailed final diagnostics. |
+| `--no-color` | `scan`, `plan`, `clean` | Disable ANSI styling; redirected and JSON output are never colored. |
+| `--no-progress` | `scan`, `plan`, `clean` | Disable automatic interactive animation; explicit verbose milestones remain enabled. |
 | `--help` | Standalone, or with a complete command and no other options | Show global help instead of running the command. |
 | `--version` | Standalone, or with a complete command and no other options | Show the version instead of running the command. |
 
@@ -110,6 +112,21 @@ repoglean scan ~/src --verbose --format json > report.json 2> scan.log
 # Produce a JSON report for CI or another program.
 repoglean scan ~/src --format json --no-progress
 
+# Plan a target that the eligible pool can meet without changing files.
+repoglean plan ~/src --free 5GiB
+
+# Explicitly allow dependency artifacts into the planning pool.
+repoglean plan ~/src --free 20GiB --all
+
+# Safety-validate the fixed recommendation without deleting it.
+repoglean clean ~/src --free 5GiB --dry-run
+
+# Permanently execute a target-based cleanup without prompts.
+repoglean clean ~/src --free 5GiB --yes
+
+# Emit one JSON document for automation; check both its status and process exit code.
+repoglean plan ~/src --free 5GiB --format json --no-progress
+
 # Preview normally preselected build/cache/test/IDE artifacts.
 repoglean clean ~/src --dry-run --format json
 
@@ -119,6 +136,14 @@ repoglean clean ~/src --yes --repo example --category build --format json
 # Explicitly include dependency directories such as node_modules and virtual environments.
 repoglean clean ~/src --yes --category dependency
 ```
+
+### Reclaim planning
+
+The built-in `balanced` planner uses a fixed, deterministic order. It considers disruption tiers from least to most disruptive—`test`, `build`, `cache`, `ide`, then explicitly opted-in `dependency`—and within each tier ranks `dormant` artifacts at least 30 days old before `stale` artifacts at least 7 but less than 30 days old, then `recent-or-unknown` artifacts. Future and unavailable timestamps rank as recent or unknown; timestamps affect order only, never eligibility or safety authority.
+
+Within a tier and recency band, larger estimated candidates rank first, followed by stable repository and candidate path tie-breakers. RepoGlean greedily selects candidates in that order until their cumulative logical-size estimates meet the target; this is not a subset-sum optimization or a measurement of physical disk capacity. If the eligible pool is too small, RepoGlean reports the best-effort selection and shortfall with `status: "partial"` and exit code `3`.
+
+For `clean --free --dry-run`, target achievement is based on selected bytes that completed safety validation, while completed-deletion bytes remain zero. For live cleanup, achievement is based only on selected payloads whose deletion completed. The selected list is fixed before confirmation or unattended cleanup: a skipped or failed candidate is not replaced, and there is no saved-plan replay.
 
 ## Configuration
 
@@ -177,7 +202,7 @@ Dependency rules are reported but are not preselected. Generic directory names a
 
 ## Safety and permanent deletion
 
-Before listing a candidate, RepoGlean requires a Git working tree, an active matching rule, Git-ignored status, no tracked or otherwise visible content inside the candidate, a path below the repository and requested roots, a stable filesystem identity, and one filesystem mount. Discovery does not follow directory symlinks, junctions, or reparse points; it rejects candidate links, links inside candidates, nested repositories, Git metadata, mount crossings, and inaccessible or uncertain paths. Root-level `.repoglean-quarantine-*` directories are a reserved namespace: scans prune them, emit their exact path as a warning, and never rediscover stranded payloads as candidates.
+Before listing a candidate, RepoGlean requires a Git working tree, an active matching rule, Git-ignored status, no tracked or otherwise visible content inside the candidate, a path below the repository and requested roots, a stable filesystem identity, and one filesystem mount. Discovery does not follow directory symlinks, junctions, or reparse points; it rejects candidate links, links inside candidates, nested repositories, Git metadata, mount crossings, and inaccessible or uncertain paths. Root-level `.repoglean-quarantine-*` directories are a reserved namespace: scans prune them, emit their exact path as a warning, and never rediscover stranded payloads as candidates. The planner cannot authorize deletion: every selected candidate remains subject to this scan authority and the cleanup revalidation below.
 
 Scanning binds every candidate to the stable identity and mount of its repository root. Cleanup revalidates that repository boundary, rule activation, ignore state, tracked/visible content, candidate identity/type/mount, and link-free ancestors after the pre-move callback. It creates a private GUID-named quarantine inside the validated repository and atomically moves the candidate to a unique payload name with a no-copy, no-overwrite platform primitive. The same authority is checked against the absent original path after ownership and again at the final deletion boundary; Git index queries catch newly staged paths and ignore evaluation bypasses index suppression for the absent path. Marker-visible Git listings exclude the reserved quarantine namespace so owned or previously stranded payloads cannot activate rules, while an independent index check still rejects tracked or staged content in the current quarantine.
 
@@ -206,18 +231,18 @@ Normal redirected execution is silent on stderr unless RepoGlean has a genuine w
 
 JSON integer fields are byte/file/count values, `schemaVersion` is currently `1`, and the stable top-level fields are:
 
-- `schemaVersion`, `operation`, and `status` (`success`, `partial`, `failed`, or `interrupted`);
+- `schemaVersion`, `operation` (`scan`, `plan`, or `clean`), and `status` (`success`, `partial`, `failed`, or `interrupted`);
 - `effectiveRoots`, `repositories`, `totals`, `warnings`, and `errors`;
-- `rules` for `rules list`, and `cleanup` for clean reports.
+- `rules` for `rules list`, `plan` for planning reports, and `cleanup` for clean reports.
 
-Cleanup candidates add `outcome`, `message`, and `deletionCompleted`; the cleanup summary distinguishes originally selected candidates from processed, irreversibly deleted, skipped, and failed candidates. `deletionCompleted` can be true even when the overall item is failed because post-delete empty-quarantine cleanup failed. Automation should parse fields rather than table text and must check the process exit code:
+Cleanup candidates add `outcome`, `message`, and `deletionCompleted`; target-based cleanup also adds `cleanup.reclaimTarget` with requested, planned, safety-validated, and completed-deletion accounting. The cleanup summary distinguishes originally selected candidates from processed, irreversibly deleted, skipped, and failed candidates. `deletionCompleted` can be true even when the overall item is failed because post-delete empty-quarantine cleanup failed. Automation should parse fields rather than table text and must check the process exit code:
 
 | Exit code | Meaning |
 | --- | --- |
 | `0` | Success, user-canceled interactive cleanup, or no candidates. |
 | `1` | Fatal operational failure, including unavailable Git. |
 | `2` | Invalid invocation or configuration. |
-| `3` | Partial result: warnings, safety skips, or per-candidate failures. |
+| `3` | Partial result: target shortfall, warnings, safety skips, or per-candidate failures. |
 | `130` | Interrupted operation. |
 
 Reported sizes are estimates: RepoGlean sums logical file lengths, saturating at the maximum signed 64-bit integer. They are not filesystem block usage or promised reclaimed capacity, and may differ because of sparse files, compression, clones, hard links, metadata, or concurrent change. `estimatedDeletedBytes` counts candidates whose payload deletion completed, independently of later quarantine-cleanup status.

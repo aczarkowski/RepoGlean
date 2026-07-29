@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using RepoGlean.Cli;
 using RepoGlean.Cleaning;
 using RepoGlean.Configuration;
@@ -69,6 +70,7 @@ public sealed record PlanningCandidateReport(
     int? PlanningOrder,
     int DisruptionTier,
     string RecencyBand,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     DateTimeOffset? NewestWriteTimeUtc,
     string PlanningReason);
 

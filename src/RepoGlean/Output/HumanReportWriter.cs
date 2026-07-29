@@ -99,15 +99,19 @@ public static class HumanReportWriter
         }
 
         WriteHeading(output, "Reclaim plan", options.UseColor);
+        output.WriteLine($"Eligible pool: {FormatBytes(plan.EligibleBytes)}");
         foreach (var candidate in plan.SelectedCandidates)
         {
             var order = candidate.PlanningOrder?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-";
-            output.WriteLine($"  {order}. {candidate.RelativePath} [{candidate.RuleId}; {candidate.Category}; recency={candidate.RecencyBand}; {FormatBytes(candidate.EstimatedBytes)}]");
+            output.WriteLine($"  {order}. {candidate.RepositoryRoot}: {candidate.RelativePath} [{candidate.RuleId}; {candidate.Category}; recency={candidate.RecencyBand}; {FormatBytes(candidate.EstimatedBytes)}]");
         }
 
         if (!options.Quiet)
         {
-            output.WriteLine($"Preserved candidates: {plan.PreservedCandidateCount}");
+            var preservedBytes = plan.PreservedCandidates.Aggregate(
+                0L,
+                (total, candidate) => FileTreeAnalyzer.SaturatingAdd(total, candidate.EstimatedBytes));
+            output.WriteLine($"Preserved candidates: {plan.PreservedCandidateCount} | {FormatBytes(preservedBytes)}");
             foreach (var candidate in plan.PreservedCandidates)
             {
                 output.WriteLine($"  {candidate.RelativePath} [{candidate.RuleId}; {candidate.Category}; recency={candidate.RecencyBand}; {FormatBytes(candidate.EstimatedBytes)}]");

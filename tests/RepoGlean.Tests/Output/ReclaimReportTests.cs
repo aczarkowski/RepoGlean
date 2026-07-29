@@ -33,6 +33,33 @@ public sealed class ReclaimReportTests
     }
 
     [Fact]
+    public async Task Plan_json_includes_a_null_newest_write_time_for_unknown_recency()
+    {
+        var metPlan = CreateMetPlan();
+        var plan = metPlan with
+        {
+            SelectedCandidates =
+            [
+                metPlan.SelectedCandidates[0] with
+                {
+                    Candidate = metPlan.SelectedCandidates[0].Candidate with { NewestWriteTimeUtc = null },
+                },
+            ],
+        };
+        var report = ReportDocument.FromPlan(["/repos"], plan, []);
+        using var output = new StringWriter();
+
+        await JsonReportWriter.WriteAsync(report, output);
+
+        using var document = JsonDocument.Parse(output.ToString());
+        var candidate = document.RootElement
+            .GetProperty("plan")
+            .GetProperty("selectedCandidates")[0];
+        Assert.True(candidate.TryGetProperty("newestWriteTimeUtc", out var newestWriteTimeUtc));
+        Assert.Equal(JsonValueKind.Null, newestWriteTimeUtc.ValueKind);
+    }
+
+    [Fact]
     public void Human_plan_always_lists_selected_rows_and_marks_estimated_values()
     {
         var report = ReportDocument.FromPlan(["/repos"], CreateMetPlan(), []);
@@ -48,6 +75,23 @@ public sealed class ReclaimReportTests
         Assert.Contains("Overshoot:", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("test", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("estimated", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Human_plan_shows_repository_eligible_pool_and_preserved_size_context()
+    {
+        var report = ReportDocument.FromPlan(["/repos"], CreateMetPlan(), []);
+        using var output = new StringWriter();
+
+        HumanReportWriter.WritePlan(
+            report,
+            output,
+            new HumanReportOptions(false, false, false, false));
+
+        var text = output.ToString();
+        Assert.Contains("/repos/sample: TestResults", text, StringComparison.Ordinal);
+        Assert.Contains("Eligible pool: 14 B estimated", text, StringComparison.Ordinal);
+        Assert.Contains("Preserved candidates: 1 | 8 B estimated", text, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -4,12 +4,18 @@ namespace RepoGlean.Scanning;
 
 public sealed record OperationWarning(string Path, string Message);
 
+public readonly record struct FileSystemBirthStamp(
+    long Primary,
+    long Secondary,
+    uint Generation = 0);
+
 public sealed record FileSystemIdentity(
     ulong VolumeId,
     ulong FileId,
     string MountId,
     FileAttributes Attributes,
-    string? LinkTarget);
+    string? LinkTarget,
+    FileSystemBirthStamp BirthStamp);
 
 public sealed record ArtifactCandidate(
     string RepositoryRoot,

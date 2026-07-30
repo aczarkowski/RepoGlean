@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using RepoGlean.Cleaning;
 using RepoGlean.Scanning;
 using RepoGlean.Tests.Support;
 
@@ -196,13 +197,42 @@ public sealed class FileTreeAnalyzerTests
     }
 
     [Theory]
-    [InlineData(0x1100u, true)]
+    [InlineData(0x1900u, true)]
+    [InlineData(0x1100u, false)]
+    [InlineData(0x0900u, false)]
+    [InlineData(0x1800u, false)]
     [InlineData(0x0100u, false)]
+    [InlineData(0x0800u, false)]
     [InlineData(0x1000u, false)]
     [InlineData(0u, false)]
-    public void Linux_identity_requires_both_inode_and_mount_id_masks(uint mask, bool expected)
+    public void Linux_identity_requires_inode_birth_time_and_mount_id_masks(uint mask, bool expected)
     {
         Assert.Equal(expected, FileSystemIdentityProvider.HasRequiredLinuxIdentity(mask));
+    }
+
+    [Fact]
+    public void Native_identity_birth_stamp_survives_rename_and_distinguishes_a_replacement()
+    {
+        using var temporary = new TemporaryDirectory();
+        var originalPath = temporary.GetPath("candidate");
+        var movedPath = temporary.GetPath("original-candidate");
+        Directory.CreateDirectory(originalPath);
+        var provider = new FileSystemIdentityProvider();
+        Assert.True(provider.TryGetIdentity(originalPath, out var original, out var originalError), originalError);
+        Assert.NotNull(original);
+        Assert.NotEqual(default, original.BirthStamp);
+
+        Directory.Move(originalPath, movedPath);
+        Assert.True(provider.TryGetIdentity(movedPath, out var moved, out var movedError), movedError);
+        Assert.NotNull(moved);
+        Assert.True(CleanupIdentity.HasSameStableIdentity(original, moved));
+
+        Thread.Sleep(TimeSpan.FromMilliseconds(25));
+        Directory.CreateDirectory(originalPath);
+        Assert.True(provider.TryGetIdentity(originalPath, out var replacement, out var replacementError), replacementError);
+        Assert.NotNull(replacement);
+        Assert.NotEqual(original.BirthStamp, replacement.BirthStamp);
+        Assert.False(CleanupIdentity.HasSameStableIdentity(original, replacement));
     }
 
     private sealed class UnavailableIdentityProvider : IFileSystemIdentityProvider
@@ -230,7 +260,13 @@ public sealed class FileTreeAnalyzerTests
             var mountId = RepositoryDiscovery.IsSameOrDescendant(System.IO.Path.GetFullPath(path), System.IO.Path.GetFullPath(foreignMountRoot))
                 ? "foreign-mount"
                 : "repository-mount";
-            identity = new FileSystemIdentity(1, unchecked((ulong)System.IO.Path.GetFullPath(path).GetHashCode()), mountId, attributes, null);
+            identity = new FileSystemIdentity(
+                1,
+                unchecked((ulong)System.IO.Path.GetFullPath(path).GetHashCode()),
+                mountId,
+                attributes,
+                null,
+                new FileSystemBirthStamp(0, 0));
             error = null;
             return true;
         }

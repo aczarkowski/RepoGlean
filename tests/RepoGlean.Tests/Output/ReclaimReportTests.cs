@@ -447,7 +447,8 @@ public sealed class ReclaimReportTests
             2,
             "mount",
             FileAttributes.Directory,
-            LinkTarget: null);
+            LinkTarget: null,
+            new FileSystemBirthStamp(0, 0));
         var selectedCandidate = new ArtifactCandidate(
             "/repos/sample",
             "/repos/sample/TestResults",

@@ -23,7 +23,7 @@ public sealed class RepositoryScannerTests
         var expected = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
         var candidatePath = repository.GetPath("obj");
         File.SetLastWriteTimeUtc(repository.GetPath("obj/artifact.bin"), expected.UtcDateTime.AddDays(-1));
-        File.SetLastWriteTimeUtc(candidatePath, expected.UtcDateTime);
+        Directory.SetLastWriteTimeUtc(candidatePath, expected.UtcDateTime);
 
         var result = await ScanAsync(new GitClient(), repository);
 

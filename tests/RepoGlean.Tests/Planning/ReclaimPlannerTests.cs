@@ -29,7 +29,7 @@ public sealed class ReclaimPlannerTests
         Assert.Equal(0, plan.ShortfallBytes);
         Assert.Equal(
             ["/repos/b/TestResults", "/repos/a/TestResults"],
-            plan.SelectedCandidates.Select(item => item.Candidate.AbsolutePath));
+            plan.SelectedCandidates.Select(item => item.Candidate.AbsolutePath.Replace('\\', '/')));
         Assert.Equal([1, 2], plan.SelectedCandidates.Select(item => item.PlanningOrder));
         Assert.Equal(2, plan.PreservedCandidates.Count);
     }
@@ -221,7 +221,8 @@ public sealed class ReclaimPlannerTests
             2,
             "mount",
             FileAttributes.Directory,
-            LinkTarget: null);
+            LinkTarget: null,
+            new FileSystemBirthStamp(0, 0));
         return new ArtifactCandidate(
             repositoryRoot,
             Path.Combine(repositoryRoot, relativePath),

@@ -9,7 +9,13 @@ public sealed class BoundaryAwareDeleterTests
     [Fact]
     public void Case_colliding_snapshot_paths_are_rejected_as_a_contained_io_failure()
     {
-        var identity = new FileSystemIdentity(1, 1, "mount", FileAttributes.Normal, null);
+        var identity = new FileSystemIdentity(
+            1,
+            1,
+            "mount",
+            FileAttributes.Normal,
+            null,
+            new FileSystemBirthStamp(0, 0));
         var snapshot = new OwnedTreeSnapshot(
         [
             new OwnedTreeEntry(".", identity with { Attributes = FileAttributes.Directory }, OwnedTreeEntryType.Directory),

@@ -311,7 +311,7 @@ public sealed class CleanCommandTests
             beforeReadLine: lineNumber =>
             {
                 if (lineNumber != 1) return;
-                Directory.Delete(repository.GetPath("obj"), recursive: true);
+                Directory.Move(repository.GetPath("obj"), temporary.GetPath("original-obj"));
                 Directory.CreateDirectory(repository.GetPath("obj"));
                 File.WriteAllText(repository.GetPath("obj/replacement.bin"), "replacement");
             });
@@ -533,7 +533,7 @@ public sealed class CleanCommandTests
             beforeReadLine: lineNumber =>
             {
                 if (lineNumber != 3) return;
-                Directory.Delete(repository.GetPath("obj"), recursive: true);
+                Directory.Move(repository.GetPath("obj"), temporary.GetPath("original-obj"));
                 Directory.CreateDirectory(repository.GetPath("obj"));
                 File.WriteAllText(repository.GetPath("obj/replacement.bin"), "replacement");
             });
@@ -589,7 +589,8 @@ public sealed class CleanCommandTests
             2,
             "mount",
             FileAttributes.Directory,
-            LinkTarget: null);
+            LinkTarget: null,
+            new FileSystemBirthStamp(0, 0));
         var candidate = new ArtifactCandidate(
             "/repos/sample",
             "/repos/sample/obj",

@@ -61,7 +61,7 @@ public sealed class ReportWriterTests
     [Fact]
     public void Dry_run_report_distinguishes_validated_candidates_from_safety_skips()
     {
-        var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
+        var identity = CreateIdentity();
         var candidate = new ArtifactCandidate("/repos/sample", "/repos/sample/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 5, identity, identity);
         var validated = ReportDocument.FromCleanup(
             ["/repos"],
@@ -79,7 +79,7 @@ public sealed class ReportWriterTests
     [Fact]
     public async Task Cleanup_json_exposes_deletion_completion_and_uses_it_for_irreversible_totals()
     {
-        var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
+        var identity = CreateIdentity();
         var candidate = new ArtifactCandidate(
             "/repos/sample",
             "/repos/sample/obj",
@@ -118,7 +118,7 @@ public sealed class ReportWriterTests
     [Fact]
     public void Interrupted_human_cleanup_summary_prints_original_selected_and_processed_counts()
     {
-        var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
+        var identity = CreateIdentity();
         var candidate = new ArtifactCandidate(
             "/repos/sample",
             "/repos/sample/obj",
@@ -148,7 +148,7 @@ public sealed class ReportWriterTests
 
     private static ReportDocument CreateReport()
     {
-        var identity = new FileSystemIdentity(1, 2, "mount", FileAttributes.Directory, null);
+        var identity = CreateIdentity();
         var small = new RepositoryScanResult(
             "/repos/small",
             [new ArtifactCandidate("/repos/small", "/repos/small/obj", "obj", "dotnet.obj", ArtifactCategory.Build, true, 1, 2, identity, identity)],
@@ -164,4 +164,12 @@ public sealed class ReportWriterTests
         var warning = new OperationWarning("/warning", "warning detail");
         return ReportDocument.FromScan(["/root"], new ScanResult([small, large], 3, 12, [warning]));
     }
+
+    private static FileSystemIdentity CreateIdentity() => new(
+        1,
+        2,
+        "mount",
+        FileAttributes.Directory,
+        null,
+        new FileSystemBirthStamp(0, 0));
 }

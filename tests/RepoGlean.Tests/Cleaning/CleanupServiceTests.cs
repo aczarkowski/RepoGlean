@@ -83,6 +83,38 @@ public sealed class CleanupServiceTests
     }
 
     [Fact]
+    public async Task Reused_file_id_with_a_different_birth_stamp_is_rejected_before_ownership()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        var identityProvider = new CandidateBirthStampReplacementProvider(
+            candidate.AbsolutePath,
+            candidate.Identity);
+
+        var result = await fixture.ExecuteAsync(
+            [candidate],
+            identityProvider: identityProvider);
+
+        AssertSkipped(result, "identity changed");
+        Assert.True(Directory.Exists(candidate.AbsolutePath));
+    }
+
+    [Fact]
+    public async Task Changed_candidate_tree_facts_are_rejected_before_ownership()
+    {
+        using var fixture = await CleanupFixture.CreateAsync();
+        var candidate = await fixture.ScanSingleAsync();
+        File.WriteAllText(
+            Path.Combine(candidate.AbsolutePath, "artifact.bin"),
+            "replacement payload");
+
+        var result = await fixture.ExecuteAsync([candidate]);
+
+        AssertSkipped(result, "contents changed");
+        Assert.True(Directory.Exists(candidate.AbsolutePath));
+    }
+
+    [Fact]
     public async Task Cleanup_failure_reports_failed_candidate_only()
     {
         using var fixture = await CleanupFixture.CreateAsync();
@@ -1216,6 +1248,37 @@ public sealed class CleanupServiceTests
             identity = new FileSystemMountIdentity(fileIdentity.VolumeId, fileIdentity.MountId);
             return true;
         }
+    }
+
+    private sealed class CandidateBirthStampReplacementProvider(
+        string candidatePath,
+        FileSystemIdentity capturedIdentity) : IFileSystemIdentityProvider
+    {
+        private readonly FileSystemIdentityProvider inner = new();
+
+        public bool TryGetIdentity(string path, out FileSystemIdentity? identity, out string? error)
+        {
+            if (string.Equals(
+                    Path.GetFullPath(path),
+                    Path.GetFullPath(candidatePath),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                identity = capturedIdentity with
+                {
+                    BirthStamp = capturedIdentity.BirthStamp with
+                    {
+                        Primary = capturedIdentity.BirthStamp.Primary + 1,
+                    },
+                };
+                error = null;
+                return true;
+            }
+
+            return inner.TryGetIdentity(path, out identity, out error);
+        }
+
+        public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? identity, out string? error) =>
+            inner.TryGetMountIdentity(path, out identity, out error);
     }
 
     public enum EarlyQuarantineFailure

@@ -21,6 +21,7 @@ internal interface IFileSystemIdentityProvider : IVolumeBoundary
 internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
 {
     internal const uint LinuxStatxInode = 0x0100;
+    internal const uint LinuxStatxBirthTime = 0x0800;
     internal const uint LinuxStatxMountId = 0x1000;
 
     public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? mountIdentity, out string? error)
@@ -87,7 +88,10 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
             ((ulong)information.FileIndexHigh << 32) | information.FileIndexLow,
             GetWindowsMountId(path),
             attributes,
-            linkTarget);
+            linkTarget,
+            new FileSystemBirthStamp(
+                CombineFileTime(information.CreationTime),
+                0));
         error = null;
         return true;
     }
@@ -101,8 +105,9 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
     {
         const int atFileWorkingDirectory = -100;
         const int atSymlinkNoFollow = 0x100;
-        const uint statxBasicStatsAndMountId = 0x07ff | LinuxStatxMountId;
-        if (Statx(atFileWorkingDirectory, path, atSymlinkNoFollow, statxBasicStatsAndMountId, out var information) != 0)
+        const uint statxBasicStatsBirthTimeAndMountId =
+            0x07ff | LinuxStatxBirthTime | LinuxStatxMountId;
+        if (Statx(atFileWorkingDirectory, path, atSymlinkNoFollow, statxBasicStatsBirthTimeAndMountId, out var information) != 0)
         {
             identity = null;
             error = NativeError("Unable to capture stable Linux filesystem identity");
@@ -112,7 +117,7 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         if (!HasRequiredLinuxIdentity(information.Mask))
         {
             identity = null;
-            error = $"Linux statx did not return required inode and mount identity fields (mask 0x{information.Mask:x}).";
+            error = $"Linux statx did not return required inode, birth-time, and mount identity fields (mask 0x{information.Mask:x}).";
             return false;
         }
 
@@ -121,7 +126,10 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
             information.Inode,
             information.MountId.ToString(CultureInfo.InvariantCulture),
             attributes,
-            linkTarget);
+            linkTarget,
+            new FileSystemBirthStamp(
+                information.BirthTime.Seconds,
+                information.BirthTime.Nanoseconds));
         error = null;
         return true;
     }
@@ -156,7 +164,11 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
             information.Inode,
             $"darwin-device:{deviceId.ToString(CultureInfo.InvariantCulture)}",
             attributes,
-            linkTarget);
+            linkTarget,
+            new FileSystemBirthStamp(
+                information.BirthTime.Seconds,
+                information.BirthTime.Nanoseconds,
+                information.Generation));
         error = null;
         return true;
     }
@@ -169,7 +181,11 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
     };
 
     internal static bool HasRequiredLinuxIdentity(uint mask) =>
-        (mask & (LinuxStatxInode | LinuxStatxMountId)) == (LinuxStatxInode | LinuxStatxMountId);
+        (mask & (LinuxStatxInode | LinuxStatxBirthTime | LinuxStatxMountId)) ==
+        (LinuxStatxInode | LinuxStatxBirthTime | LinuxStatxMountId);
+
+    private static long CombineFileTime(System.Runtime.InteropServices.ComTypes.FILETIME value) =>
+        unchecked(((long)(uint)value.dwHighDateTime << 32) | (uint)value.dwLowDateTime);
 
     private static string GetWindowsMountId(string path)
     {

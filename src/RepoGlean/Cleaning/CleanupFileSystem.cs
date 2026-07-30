@@ -115,7 +115,8 @@ internal static class CleanupIdentity
     public static bool HasSameStableIdentity(FileSystemIdentity captured, FileSystemIdentity current) =>
         captured.VolumeId == current.VolumeId &&
         captured.FileId == current.FileId &&
-        string.Equals(captured.MountId, current.MountId, StringComparison.Ordinal);
+        string.Equals(captured.MountId, current.MountId, StringComparison.Ordinal) &&
+        captured.BirthStamp == current.BirthStamp;
 
     public static bool IsSameMount(FileSystemIdentity left, FileSystemIdentity right) =>
         left.VolumeId == right.VolumeId && string.Equals(left.MountId, right.MountId, StringComparison.Ordinal);

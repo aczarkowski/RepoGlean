@@ -130,6 +130,13 @@ internal sealed class CleanupAuthorityValidator(
                     return CleanupAuthorityValidation.Failure("Candidate filesystem identity changed after the scan.");
                 }
 
+                if (candidate.FileCount != currentAnalysis.FileCount ||
+                    candidate.EstimatedBytes != currentAnalysis.EstimatedBytes)
+                {
+                    return CleanupAuthorityValidation.Failure(
+                        "Candidate contents changed after the scan.");
+                }
+
                 if (!CleanupIdentity.HasSameStableIdentity(candidate.RepositoryIdentity, currentAnalysis.RepositoryIdentity))
                 {
                     return CleanupAuthorityValidation.Failure("Repository root identity changed during candidate analysis.");

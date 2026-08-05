@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace RepoGlean.Git;
 
 public sealed class GitUnavailableException : InvalidOperationException
@@ -184,6 +186,49 @@ public sealed class GitClient
         return ignoredPaths;
     }
 
+    public async Task<IReadOnlyDictionary<string, GitIgnoreMatch>> GetIgnoreMatchesAsync(
+        string repositoryRoot,
+        IReadOnlyList<string> repositoryRelativePaths,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+        ArgumentNullException.ThrowIfNull(repositoryRelativePaths);
+        var normalizedPaths = new string[repositoryRelativePaths.Count];
+        for (var index = 0; index < repositoryRelativePaths.Count; index++)
+        {
+            var path = repositoryRelativePaths[index];
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            ValidateRelativePath(path);
+            normalizedPaths[index] = NormalizeRelativePath(path);
+        }
+
+        var matches = new Dictionary<string, GitIgnoreMatch>(StringComparer.Ordinal);
+        foreach (var batch in normalizedPaths.Chunk(MaximumCheckIgnoreBatchSize))
+        {
+            var result = await runner.RunAsync(
+                ["-C", Path.GetFullPath(repositoryRoot), "check-ignore", "--verbose", "--non-matching", "--stdin", "-z"],
+                null,
+                cancellationToken,
+                string.Concat(batch.Select(static path => $"{path}\0"))).ConfigureAwait(false);
+            if (result.ExitCode is not (0 or 1)) throw CreateFailure(result, "git check-ignore");
+
+            foreach (var match in ParseIgnoreMatches(result.StandardOutput, batch))
+            {
+                if (!matches.TryAdd(match.Path, match))
+                {
+                    throw new GitCommandException($"git check-ignore returned a duplicate record for '{match.Path}'.");
+                }
+            }
+        }
+
+        if (matches.Count != normalizedPaths.Length || normalizedPaths.Any(path => !matches.ContainsKey(path)))
+        {
+            throw new GitCommandException("git check-ignore did not return exactly one record for every requested path.");
+        }
+
+        return matches;
+    }
+
     public async Task<bool> ContainsTrackedContentAsync(
         string repositoryRoot,
         string repositoryRelativePath,
@@ -209,6 +254,62 @@ public sealed class GitClient
     }
 
     private static string NormalizeRelativePath(string path) => path.Replace('\\', '/').TrimStart('/');
+
+    private static IReadOnlyList<GitIgnoreMatch> ParseIgnoreMatches(string output, IReadOnlyList<string> requestedPaths)
+    {
+        var fields = output.Split('\0');
+        if (fields.Length == 1 && fields[0].Length == 0)
+        {
+            if (requestedPaths.Count == 0) return [];
+            throw new GitCommandException("git check-ignore returned no provenance records.");
+        }
+
+        if (fields[^1].Length != 0 || (fields.Length - 1) % 4 != 0)
+        {
+            throw new GitCommandException("git check-ignore returned malformed or truncated provenance records.");
+        }
+
+        var requested = new HashSet<string>(requestedPaths, StringComparer.Ordinal);
+        var matches = new List<GitIgnoreMatch>((fields.Length - 1) / 4);
+        for (var index = 0; index < fields.Length - 1; index += 4)
+        {
+            var source = EmptyToNull(fields[index]);
+            var sourceLineField = fields[index + 1];
+            var pattern = EmptyToNull(fields[index + 2]);
+            var path = fields[index + 3];
+            if (path.Length == 0 || !requested.Contains(path))
+            {
+                throw new GitCommandException("git check-ignore returned an unexpected provenance path.");
+            }
+
+            int? sourceLine = null;
+            if (sourceLineField.Length > 0)
+            {
+                if (!int.TryParse(sourceLineField, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLine) || parsedLine <= 0)
+                {
+                    throw new GitCommandException("git check-ignore returned an invalid provenance source line.");
+                }
+
+                sourceLine = parsedLine;
+            }
+
+            if ((source is null) != (sourceLine is null) || (source is null) != (pattern is null))
+            {
+                throw new GitCommandException("git check-ignore returned incomplete provenance evidence.");
+            }
+
+            matches.Add(new GitIgnoreMatch(path, source, sourceLine, pattern));
+        }
+
+        if (matches.Count != requestedPaths.Count || matches.Select(match => match.Path).Distinct(StringComparer.Ordinal).Count() != matches.Count)
+        {
+            throw new GitCommandException("git check-ignore returned duplicate or missing provenance records.");
+        }
+
+        return matches;
+    }
+
+    private static string? EmptyToNull(string value) => value.Length == 0 ? null : value;
 
     private static void EnsureSuccess(ProcessResult result, string operation)
     {

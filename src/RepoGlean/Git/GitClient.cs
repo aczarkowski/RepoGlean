@@ -114,10 +114,7 @@ public sealed class GitClient
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRelativePath);
-        if (Path.IsPathRooted(repositoryRelativePath) || repositoryRelativePath.Replace('\\', '/').Split('/').Any(segment => segment is "." or ".."))
-        {
-            throw new ArgumentException("Git paths must be repository-relative and cannot contain dot segments.", nameof(repositoryRelativePath));
-        }
+        ValidateRelativePath(repositoryRelativePath);
 
         var result = await runner.RunAsync(
             ["-C", Path.GetFullPath(repositoryRoot), "check-ignore", "-q", "--", NormalizeRelativePath(repositoryRelativePath)],
@@ -263,13 +260,18 @@ public sealed class GitClient
 
     private static void ValidateRelativePath(string repositoryRelativePath)
     {
-        if (Path.IsPathRooted(repositoryRelativePath) || repositoryRelativePath.Replace('\\', '/').Split('/').Any(segment => segment is "." or ".."))
+        if (Path.IsPathRooted(repositoryRelativePath) ||
+            NormalizeRelativePath(repositoryRelativePath).Split('/').Any(segment => segment is "." or ".."))
         {
             throw new ArgumentException("Git paths must be repository-relative and cannot contain dot segments.", nameof(repositoryRelativePath));
         }
     }
 
-    private static string NormalizeRelativePath(string path) => path.Replace('\\', '/').TrimStart('/');
+    private static string NormalizeRelativePath(string path)
+    {
+        var normalized = OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path;
+        return normalized.TrimStart('/');
+    }
 
     private static IReadOnlyList<GitIgnoreMatch> ParseIgnoreMatches(string output, IReadOnlyList<string> requestedPaths)
     {

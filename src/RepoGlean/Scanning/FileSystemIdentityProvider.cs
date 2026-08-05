@@ -13,16 +13,61 @@ internal interface IVolumeBoundary
     bool TryGetMountIdentity(string path, out FileSystemMountIdentity? identity, out string? error);
 }
 
+internal enum FileSystemEntryKind
+{
+    RegularFile,
+    Directory,
+    Link,
+    Other,
+}
+
+internal interface IFileSystemEntryInspector
+{
+    bool TryGetEntryKind(string path, out FileSystemEntryKind kind, out string? error);
+}
+
 internal interface IFileSystemIdentityProvider : IVolumeBoundary
 {
     bool TryGetIdentity(string path, out FileSystemIdentity? identity, out string? error);
 }
 
-internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
+internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider, IFileSystemEntryInspector
 {
     internal const uint LinuxStatxInode = 0x0100;
     internal const uint LinuxStatxBirthTime = 0x0800;
     internal const uint LinuxStatxMountId = 0x1000;
+
+    public bool TryGetEntryKind(string path, out FileSystemEntryKind kind, out string? error)
+    {
+        try
+        {
+            if (OperatingSystem.IsLinux()) return TryGetLinuxEntryKind(path, out kind, out error);
+            if (OperatingSystem.IsMacOS()) return TryGetMacEntryKind(path, out kind, out error);
+
+            var attributes = File.GetAttributes(path);
+            kind = (attributes & FileAttributes.ReparsePoint) != 0
+                ? FileSystemEntryKind.Link
+                : (attributes & FileAttributes.Directory) != 0
+                    ? FileSystemEntryKind.Directory
+                    : (attributes & FileAttributes.Device) != 0
+                        ? FileSystemEntryKind.Other
+                        : FileSystemEntryKind.RegularFile;
+            error = null;
+            return true;
+        }
+        catch (Exception exception) when (exception is
+            UnauthorizedAccessException or
+            IOException or
+            DllNotFoundException or
+            EntryPointNotFoundException or
+            MarshalDirectiveException or
+            PlatformNotSupportedException)
+        {
+            kind = FileSystemEntryKind.Other;
+            error = $"Unable to inspect filesystem entry type: {exception.Message}";
+            return false;
+        }
+    }
 
     public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? mountIdentity, out string? error)
     {
@@ -182,6 +227,33 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         return true;
     }
 
+    private static bool TryGetLinuxEntryKind(
+        string path,
+        out FileSystemEntryKind kind,
+        out string? error)
+    {
+        const int atFileWorkingDirectory = -100;
+        const int atSymlinkNoFollow = 0x100;
+        const uint statxMode = 0x0002;
+        if (Statx(atFileWorkingDirectory, path, atSymlinkNoFollow, statxMode, out var information) != 0)
+        {
+            kind = FileSystemEntryKind.Other;
+            error = NativeError("Unable to inspect Linux filesystem entry type");
+            return false;
+        }
+
+        if ((information.Mask & statxMode) != statxMode)
+        {
+            kind = FileSystemEntryKind.Other;
+            error = $"Linux statx did not return the required mode field (mask 0x{information.Mask:x}).";
+            return false;
+        }
+
+        kind = GetUnixEntryKind(information.Mode);
+        error = null;
+        return true;
+    }
+
     private static bool TryGetMacIdentity(
         string path,
         FileAttributes attributes,
@@ -220,6 +292,42 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         error = null;
         return true;
     }
+
+    private static bool TryGetMacEntryKind(
+        string path,
+        out FileSystemEntryKind kind,
+        out string? error)
+    {
+        MacStat information = default;
+        var interop = SelectMacStatInterop(RuntimeInformation.ProcessArchitecture);
+        var result = interop switch
+        {
+            MacStatInteropKind.Arm64Unsuffixed => LStatMacArm64(path, out information),
+            MacStatInteropKind.X64Inode64 => LStatMacX64(path, out information),
+            _ => -1,
+        };
+        if (result != 0)
+        {
+            kind = FileSystemEntryKind.Other;
+            error = interop == MacStatInteropKind.Unsupported
+                ? $"Filesystem entry type inspection is unavailable on macOS architecture {RuntimeInformation.ProcessArchitecture}."
+                : NativeError("Unable to inspect macOS filesystem entry type");
+            return false;
+        }
+
+        kind = GetUnixEntryKind(information.Mode);
+        error = null;
+        return true;
+    }
+
+    private static FileSystemEntryKind GetUnixEntryKind(ushort mode) =>
+        (mode & 0xf000) switch
+        {
+            0x8000 => FileSystemEntryKind.RegularFile,
+            0x4000 => FileSystemEntryKind.Directory,
+            0xa000 => FileSystemEntryKind.Link,
+            _ => FileSystemEntryKind.Other,
+        };
 
     internal static MacStatInteropKind SelectMacStatInterop(Architecture architecture) => architecture switch
     {

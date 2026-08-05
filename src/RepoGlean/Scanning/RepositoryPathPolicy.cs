@@ -11,8 +11,11 @@ internal static class RepositoryPathPolicy
     internal static StringComparer PathComparer =>
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    internal static string NormalizeRelativePath(string path) =>
-        path.Replace('\\', '/').TrimStart('/');
+    internal static string NormalizeRelativePath(string path)
+    {
+        var normalized = OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path;
+        return normalized.TrimStart('/');
+    }
 
     internal static bool IsExcluded(
         string absolutePath,

@@ -120,17 +120,18 @@ public sealed class RepositoryAuditorTests
     {
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
-        repository.Write(".gitignore", "cache/\n!cache/\ncache/*\n!cache/keep/\n");
+        repository.Write(".gitignore", "cache/\n!cache/\ncache/*\n!cache/keep/\ncache/keep/*.tmp\n");
         await repository.CommitAllAsync();
         repository.WriteBytes("cache/drop.bin", 7);
         repository.WriteBytes("cache/keep/visible.bin", 11);
+        repository.WriteBytes("cache/keep/ignored.tmp", 5);
 
         var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
 
-        var finding = Assert.Single(result.Repositories.Single().Findings);
-        Assert.Equal("cache/drop.bin", finding.RelativePath);
-        Assert.Equal(7, finding.EstimatedBytes);
-        Assert.Equal("cache/*", finding.Ignore.Pattern);
+        var findings = result.Repositories.Single().Findings;
+        Assert.Equal(["cache/drop.bin", "cache/keep/ignored.tmp"], findings.Select(finding => finding.RelativePath));
+        Assert.Equal(["cache/*", "cache/keep/*.tmp"], findings.Select(finding => finding.Ignore.Pattern));
+        Assert.DoesNotContain(findings, finding => finding.RelativePath == "cache/keep");
     }
 
     [Fact]
@@ -330,6 +331,92 @@ public sealed class RepositoryAuditorTests
         Assert.Equal(expected.OrderByDescending(item => item.Size).Select(item => item.Path), findings.Select(item => item.RelativePath));
         Assert.Equal(expected.Sum(item => item.Size), result.EstimatedBytes);
         Assert.All(findings, finding => Assert.Equal("cache*/", finding.Ignore.Pattern));
+    }
+
+    [Fact]
+    public async Task Audit_preserves_unix_backslashes_without_creating_artificial_dot_segments()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "cache*\n");
+        await repository.CommitAllAsync();
+        const string ordinary = "cache\\ordinary";
+        const string dotSegmentLookalike = "cache\\..\\payload";
+        repository.WriteBytes($"{ordinary}/data.bin", 3);
+        repository.WriteBytes($"{dotSegmentLookalike}/data.bin", 5);
+
+        var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
+
+        var findings = result.Repositories.Single().Findings;
+        Assert.Equal([dotSegmentLookalike, ordinary], findings.Select(finding => finding.RelativePath));
+        Assert.Equal([dotSegmentLookalike, ordinary], findings.Select(finding => finding.Ignore.Path));
+        Assert.All(findings, finding => Assert.Equal("cache*", finding.Ignore.Pattern));
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public async Task Audit_omits_an_ignored_fifo_as_a_non_regular_filesystem_entry()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "regular.bin\nspecial.pipe\n");
+        await repository.CommitAllAsync();
+        repository.WriteBytes("regular.bin", 7);
+        await GitTestRepository.RunAsync("mkfifo", repository.Path, null, "special.pipe");
+
+        var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
+
+        var finding = Assert.Single(result.Repositories.Single().Findings);
+        Assert.Equal("regular.bin", finding.RelativePath);
+        Assert.Equal(1, result.FileCount);
+        Assert.Equal(7, result.EstimatedBytes);
+        Assert.Contains(
+            new OperationWarning(
+                repository.GetPath("special.pipe"),
+                "Skipped non-regular audit filesystem entry."),
+            result.Warnings);
+    }
+
+    [Fact]
+    public async Task Audit_revalidates_a_directory_replaced_by_a_link_during_git_classification()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "unknown\n");
+        await repository.CommitAllAsync();
+        var target = repository.GetPath("unknown");
+        repository.WriteBytes("unknown/local.bin", 7);
+        var external = temporary.GetPath("external");
+        Directory.CreateDirectory(external);
+        var externalPayload = Path.Combine(external, "outside.bin");
+        File.WriteAllBytes(externalPayload, new byte[29]);
+        var trigger = temporary.GetPath("replace-on-check-ignore");
+        File.WriteAllText(trigger, "trigger");
+        var wrapper = temporary.GetPath("git-wrapper");
+        File.WriteAllText(
+            wrapper,
+            "#!/bin/sh\nif [ \"$3\" = \"check-ignore\" ] && [ -f \"$REPOGLEAN_RACE_TRIGGER\" ]; then rm -rf -- \"$REPOGLEAN_RACE_TARGET\"; ln -s \"$REPOGLEAN_RACE_EXTERNAL\" \"$REPOGLEAN_RACE_TARGET\"; rm -f -- \"$REPOGLEAN_RACE_TRIGGER\"; fi\nexec git \"$@\"\n");
+        File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var git = new GitClient(wrapper, new Dictionary<string, string?>
+        {
+            ["REPOGLEAN_RACE_TRIGGER"] = trigger,
+            ["REPOGLEAN_RACE_TARGET"] = target,
+            ["REPOGLEAN_RACE_EXTERNAL"] = external,
+        });
+
+        var result = await AuditAsync(git, [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
+
+        Assert.Empty(result.Repositories.Single().Findings);
+        Assert.Equal(0, result.FileCount);
+        Assert.Equal(0, result.EstimatedBytes);
+        Assert.Contains(
+            new OperationWarning(target, "Skipped audit filesystem link, junction, or reparse point."),
+            result.Warnings);
+        Assert.True(File.Exists(externalPayload));
+        Assert.Equal(29, new FileInfo(externalPayload).Length);
     }
 
     [Fact]

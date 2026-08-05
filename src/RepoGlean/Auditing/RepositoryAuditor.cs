@@ -9,6 +9,7 @@ public sealed class RepositoryAuditor
 {
     private readonly GitClient git;
     private readonly IVolumeBoundary volumeBoundary;
+    private readonly IFileSystemEntryInspector entryInspector;
     private readonly IFileTimestampProvider timestampProvider;
     private readonly IOperationProgress progress;
 
@@ -25,6 +26,7 @@ public sealed class RepositoryAuditor
     {
         this.git = git ?? throw new ArgumentNullException(nameof(git));
         this.volumeBoundary = volumeBoundary ?? throw new ArgumentNullException(nameof(volumeBoundary));
+        entryInspector = volumeBoundary as IFileSystemEntryInspector ?? new FileSystemIdentityProvider();
         this.timestampProvider = timestampProvider ?? throw new ArgumentNullException(nameof(timestampProvider));
         this.progress = progress ?? throw new ArgumentNullException(nameof(progress));
     }
@@ -176,24 +178,25 @@ public sealed class RepositoryAuditor
                 continue;
             }
 
-            FileAttributes attributes;
-            try
+            if (!entryInspector.TryGetEntryKind(path, out var entryKind, out var entryKindError))
             {
-                attributes = File.GetAttributes(path);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-            {
-                AddWarning(warnings, path, $"Unable to inspect audit entry: {exception.Message}");
+                AddWarning(warnings, path, entryKindError ?? "Unable to inspect audit entry type.");
                 continue;
             }
 
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            if (entryKind == FileSystemEntryKind.Link)
             {
                 AddWarning(warnings, path, "Skipped audit filesystem link, junction, or reparse point.");
                 continue;
             }
 
-            var isDirectory = (attributes & FileAttributes.Directory) != 0;
+            if (entryKind == FileSystemEntryKind.Other)
+            {
+                AddWarning(warnings, path, "Skipped non-regular audit filesystem entry.");
+                continue;
+            }
+
+            var isDirectory = entryKind == FileSystemEntryKind.Directory;
             if (isDirectory && RepositoryPathPolicy.IsRepositoryBoundary(path))
             {
                 AddWarning(warnings, path, "Skipped nested repository boundary.");
@@ -227,6 +230,7 @@ public sealed class RepositoryAuditor
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!matches.TryGetValue(entry.RelativePath, out var match)) continue;
+            if (!TryRevalidateEntry(entry, repositoryMount, warnings)) continue;
             var child = entry.IsDirectory
                 ? await AuditDirectoryAsync(
                     repositoryRoot,
@@ -243,6 +247,57 @@ public sealed class RepositoryAuditor
         }
 
         return aggregate;
+    }
+
+    private bool TryRevalidateEntry(
+        AuditEntry entry,
+        FileSystemMountIdentity repositoryMount,
+        List<OperationWarning> warnings)
+    {
+        if (!entryInspector.TryGetEntryKind(entry.AbsolutePath, out var entryKind, out var entryKindError))
+        {
+            AddWarning(warnings, entry.AbsolutePath, entryKindError ?? "Unable to revalidate audit entry type.");
+            return false;
+        }
+
+        if (entryKind == FileSystemEntryKind.Link)
+        {
+            AddWarning(warnings, entry.AbsolutePath, "Skipped audit filesystem link, junction, or reparse point.");
+            return false;
+        }
+
+        if (entryKind == FileSystemEntryKind.Other)
+        {
+            AddWarning(warnings, entry.AbsolutePath, "Skipped non-regular audit filesystem entry.");
+            return false;
+        }
+
+        var isDirectory = entryKind == FileSystemEntryKind.Directory;
+        if (isDirectory != entry.IsDirectory)
+        {
+            AddWarning(warnings, entry.AbsolutePath, "Skipped audit entry that changed type during classification.");
+            return false;
+        }
+
+        if (isDirectory && RepositoryPathPolicy.IsRepositoryBoundary(entry.AbsolutePath))
+        {
+            AddWarning(warnings, entry.AbsolutePath, "Skipped nested repository boundary.");
+            return false;
+        }
+
+        if (!volumeBoundary.TryGetMountIdentity(entry.AbsolutePath, out var mount, out var mountError) || mount is null)
+        {
+            AddWarning(warnings, entry.AbsolutePath, mountError ?? "Unable to revalidate the audit path filesystem mount.");
+            return false;
+        }
+
+        if (mount != repositoryMount)
+        {
+            AddWarning(warnings, entry.AbsolutePath, "Skipped path on a different filesystem mount or volume.");
+            return false;
+        }
+
+        return true;
     }
 
     private async Task<AuditAggregate> AuditDirectoryAsync(

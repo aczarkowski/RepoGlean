@@ -510,6 +510,33 @@ public sealed class RepositoryScannerTests
     }
 
     [Fact]
+    public async Task ScanAsync_preserves_a_unix_backslash_name_that_would_normalize_to_dot_segments()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "cache*\n");
+        await repository.CommitAllAsync();
+        const string relativePath = "cache\\..\\artifact";
+        repository.WriteBytes($"{relativePath}/payload.bin", 7);
+        var rule = new ArtifactRule(
+            "test.unix-backslash",
+            ArtifactCategory.Build,
+            ["cache/../artifact"],
+            [],
+            true);
+
+        var result = await new RepositoryScanner(new GitClient()).ScanAsync(
+            [repository.Path],
+            new RuleCatalog([rule]));
+
+        var candidate = Assert.Single(result.Repositories.Single().Candidates);
+        Assert.Equal(relativePath, candidate.RelativePath);
+        Assert.Equal(repository.GetPath(relativePath), candidate.AbsolutePath);
+        Assert.Equal(7, candidate.EstimatedBytes);
+    }
+
+    [Fact]
     public async Task ScanAsync_warns_for_a_repository_git_failure_and_continues_with_other_repositories()
     {
         using var temporary = new TemporaryDirectory();

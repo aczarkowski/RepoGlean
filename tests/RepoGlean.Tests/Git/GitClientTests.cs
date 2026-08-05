@@ -138,4 +138,20 @@ public sealed class GitClientTests
         Assert.False(ordinary);
         Assert.True(withoutIndex);
     }
+
+    [Fact]
+    public async Task Scalar_ignore_authority_preserves_unix_backslashes_that_surround_dot_text()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "cache*\n");
+        await repository.CommitAllAsync();
+        const string relativePath = "cache\\..\\payload";
+        repository.WriteBytes($"{relativePath}/data.bin", 1);
+
+        var ignored = await new GitClient().IsIgnoredAsync(repository.Path, relativePath);
+
+        Assert.True(ignored);
+    }
 }

@@ -26,6 +26,26 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
 
     public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? mountIdentity, out string? error)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                return TryGetLinuxMountIdentity(path, out mountIdentity, out error);
+            }
+            catch (Exception exception) when (exception is
+                UnauthorizedAccessException or
+                IOException or
+                DllNotFoundException or
+                EntryPointNotFoundException or
+                MarshalDirectiveException or
+                PlatformNotSupportedException)
+            {
+                mountIdentity = null;
+                error = $"Unable to capture Linux mount identity: {exception.Message}";
+                return false;
+            }
+        }
+
         if (TryGetIdentity(path, out var identity, out error) && identity is not null)
         {
             mountIdentity = new FileSystemMountIdentity(identity.VolumeId, identity.MountId);
@@ -134,6 +154,34 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
         return true;
     }
 
+    private static bool TryGetLinuxMountIdentity(
+        string path,
+        out FileSystemMountIdentity? identity,
+        out string? error)
+    {
+        const int atFileWorkingDirectory = -100;
+        const int atSymlinkNoFollow = 0x100;
+        if (Statx(atFileWorkingDirectory, path, atSymlinkNoFollow, LinuxStatxMountId, out var information) != 0)
+        {
+            identity = null;
+            error = NativeError("Unable to capture Linux mount identity");
+            return false;
+        }
+
+        if (!HasRequiredLinuxMountIdentity(information.Mask))
+        {
+            identity = null;
+            error = $"Linux statx did not return the required mount identity field (mask 0x{information.Mask:x}).";
+            return false;
+        }
+
+        identity = new FileSystemMountIdentity(
+            ((ulong)information.DeviceMajor << 32) | information.DeviceMinor,
+            information.MountId.ToString(CultureInfo.InvariantCulture));
+        error = null;
+        return true;
+    }
+
     private static bool TryGetMacIdentity(
         string path,
         FileAttributes attributes,
@@ -183,6 +231,9 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider
     internal static bool HasRequiredLinuxIdentity(uint mask) =>
         (mask & (LinuxStatxInode | LinuxStatxBirthTime | LinuxStatxMountId)) ==
         (LinuxStatxInode | LinuxStatxBirthTime | LinuxStatxMountId);
+
+    internal static bool HasRequiredLinuxMountIdentity(uint mask) =>
+        (mask & LinuxStatxMountId) == LinuxStatxMountId;
 
     private static long CombineFileTime(System.Runtime.InteropServices.ComTypes.FILETIME value) =>
         unchecked(((long)(uint)value.dwHighDateTime << 32) | (uint)value.dwLowDateTime);

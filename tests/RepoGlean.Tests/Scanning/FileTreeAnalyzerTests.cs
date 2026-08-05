@@ -210,6 +210,33 @@ public sealed class FileTreeAnalyzerTests
         Assert.Equal(expected, FileSystemIdentityProvider.HasRequiredLinuxIdentity(mask));
     }
 
+    [Theory]
+    [InlineData(0x1000u, true)]
+    [InlineData(0x1800u, true)]
+    [InlineData(0x0800u, false)]
+    [InlineData(0u, false)]
+    public void Linux_mount_identity_requires_mount_id_but_not_birth_time(uint mask, bool expected)
+    {
+        Assert.Equal(expected, FileSystemIdentityProvider.HasRequiredLinuxMountIdentity(mask));
+    }
+
+    [Fact]
+    public void Native_mount_identity_survives_rename()
+    {
+        using var temporary = new TemporaryDirectory();
+        var originalPath = temporary.GetPath("candidate");
+        var movedPath = temporary.GetPath("moved-candidate");
+        Directory.CreateDirectory(originalPath);
+        var provider = new FileSystemIdentityProvider();
+        Assert.True(provider.TryGetMountIdentity(originalPath, out var original, out var originalError), originalError);
+        Assert.NotNull(original);
+
+        Directory.Move(originalPath, movedPath);
+        Assert.True(provider.TryGetMountIdentity(movedPath, out var moved, out var movedError), movedError);
+
+        Assert.Equal(original, moved);
+    }
+
     [Fact]
     public void Native_identity_birth_stamp_survives_rename_and_distinguishes_a_replacement()
     {

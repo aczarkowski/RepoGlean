@@ -5,6 +5,47 @@ namespace RepoGlean.Tests.Cli;
 public sealed class CliParserTests
 {
     [Fact]
+    public void Parse_audit_accepts_discovery_reporting_and_zero_minimum()
+    {
+        var result = CliParser.Parse([
+            "audit", "root", "--repo", "api", "--exclude", "tmp/**",
+            "--min-size", "0", "--all-drives", "--format", "json",
+            "--config", "config.json", "--quiet", "--verbose",
+            "--no-color", "--no-progress",
+        ]);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(CommandKind.Audit, result.Value!.Command);
+        Assert.Equal(0, result.Value.MinimumBytes);
+    }
+
+    [Theory]
+    [InlineData("--category", "cache")]
+    [InlineData("--details")]
+    [InlineData("--free", "1GiB")]
+    [InlineData("--all")]
+    [InlineData("--dry-run")]
+    [InlineData("--yes")]
+    public void Parse_audit_rejects_non_audit_options(params string[] option)
+    {
+        var result = CliParser.Parse(["audit", .. option]);
+
+        Assert.False(result.IsSuccess);
+    }
+
+    [Theory]
+    [InlineData("scan")]
+    [InlineData("plan", "--free", "1B")]
+    [InlineData("clean", "--dry-run")]
+    public void Parse_zero_minimum_remains_invalid_outside_audit(params string[] command)
+    {
+        var result = CliParser.Parse([.. command, "--min-size", "0"]);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("positive", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Parse_scan_accepts_roots_and_options()
     {
         var result = CliParser.Parse(["scan", "one", "two", "--repo", "api", "--category", "build", "--exclude", "generated", "--min-size", "1.5MiB", "--all-drives", "--details"]);

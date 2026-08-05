@@ -50,8 +50,15 @@ public static class CliParser
                         break;
                     case "--min-size":
                         if (!TryReadValue(arguments, ref index, argument, out var minimumSize, out error)) return ParseResult<CliOptions>.Failure(error);
-                        if (!ByteSizeParser.TryParse(minimumSize, out var parsedMinimumBytes)) return ParseResult<CliOptions>.Failure($"Invalid byte size '{minimumSize}'.");
-                        minimumBytes = parsedMinimumBytes;
+                        if (minimumSize.Trim() == "0")
+                        {
+                            minimumBytes = 0;
+                        }
+                        else
+                        {
+                            if (!ByteSizeParser.TryParse(minimumSize, out var parsedMinimumBytes)) return ParseResult<CliOptions>.Failure($"Invalid byte size '{minimumSize}'.");
+                            minimumBytes = parsedMinimumBytes;
+                        }
                         break;
                     case "--free":
                         if (!TryReadValue(arguments, ref index, argument, out var freeSize, out error)) return ParseResult<CliOptions>.Failure(error);
@@ -106,7 +113,7 @@ public static class CliParser
                 continue;
             }
 
-            if (command is CommandKind.Scan or CommandKind.Plan or CommandKind.Clean)
+            if (command is CommandKind.Scan or CommandKind.Audit or CommandKind.Plan or CommandKind.Clean)
             {
                 roots.Add(argument);
                 continue;
@@ -138,6 +145,11 @@ public static class CliParser
         if (yes && command != CommandKind.Clean)
         {
             return ParseResult<CliOptions>.Failure("--yes is only valid with clean.");
+        }
+
+        if (minimumBytes == 0 && command != CommandKind.Audit)
+        {
+            return ParseResult<CliOptions>.Failure("--min-size must be positive outside audit.");
         }
 
         if (command == CommandKind.Plan && freeBytes is null)
@@ -198,6 +210,7 @@ public static class CliParser
         switch (value.ToLowerInvariant())
         {
             case "scan": command = CommandKind.Scan; return true;
+            case "audit": command = CommandKind.Audit; return true;
             case "plan": command = CommandKind.Plan; return true;
             case "clean": command = CommandKind.Clean; return true;
             case "rules": command = CommandKind.RulesList; awaitingSubcommand = true; return true;
@@ -259,6 +272,9 @@ public static class CliParser
         CommandKind.Scan => option is
             "--repo" or "--category" or "--exclude" or "--min-size" or "--format" or "--config" or
             "--all-drives" or "--details" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
+        CommandKind.Audit => option is
+            "--repo" or "--exclude" or "--min-size" or "--format" or "--config" or
+            "--all-drives" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
         CommandKind.Plan => option is
             "--repo" or "--category" or "--exclude" or "--min-size" or "--free" or "--format" or "--config" or
             "--all-drives" or "--all" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",

@@ -14,9 +14,21 @@ public sealed class ReadOnlyCommandTests
 
         Assert.Equal(0, help.ExitCode);
         Assert.Contains("Usage:", help.Stdout);
+        Assert.Contains("repoglean audit", help.Stdout);
+        Assert.Contains("Audit options:", help.Stdout);
         Assert.Equal(string.Empty, help.Stderr);
         Assert.Equal(0, version.ExitCode);
         Assert.Equal("repoglean 2.2.0", version.Stdout.Trim());
+    }
+
+    [Fact]
+    public async Task Audit_reports_the_temporary_unsupported_command_error()
+    {
+        var result = await RunAsync(["audit"]);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Equal($"Error: audit is not implemented.{Environment.NewLine}", result.Stderr);
     }
 
     [Fact]

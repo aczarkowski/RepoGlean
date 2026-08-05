@@ -3,6 +3,7 @@ namespace RepoGlean.Cli;
 public enum CommandKind
 {
     Scan,
+    Audit,
     Plan,
     Clean,
     RulesList,

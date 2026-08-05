@@ -105,6 +105,9 @@ public static class RepoGleanApp
                 case CommandKind.Version:
                     stdout.WriteLine($"repoglean {GetVersion()}");
                     return 0;
+                case CommandKind.Audit:
+                    await stderr.WriteLineAsync("Error: audit is not implemented.").ConfigureAwait(false);
+                    return 2;
                 case CommandKind.ConfigPath:
                     stdout.WriteLine(ResolveConfigPath(options.ConfigPath));
                     return 0;
@@ -780,6 +783,7 @@ public static class RepoGleanApp
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine("  repoglean scan [root ...] [options]");
+        output.WriteLine("  repoglean audit [root ...] [options]");
         output.WriteLine("  repoglean plan [root ...] --free size [options]");
         output.WriteLine("  repoglean clean [root ...] [options]");
         output.WriteLine("  repoglean rules list [--format table|json] [--config path]");
@@ -789,6 +793,7 @@ public static class RepoGleanApp
         output.WriteLine("Scan options: --repo name --category value --exclude path --min-size size");
         output.WriteLine("              --all-drives --format table|json");
         output.WriteLine("Scan report:  --details (include candidate rows in the final scan report)");
+        output.WriteLine("Audit options: --repo name --exclude path --min-size size --all-drives --format table|json");
         output.WriteLine("Plan options: --free size --repo name --category value --exclude path");
         output.WriteLine("              --min-size size --all-drives --all --format table|json");
         output.WriteLine("Clean options: --free size --dry-run --yes --all (unattended --yes also requires a scope)");

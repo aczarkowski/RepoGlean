@@ -283,6 +283,53 @@ public sealed class EndToEndTests
     }
 
     [Fact]
+    public async Task Built_executable_audits_only_unclassified_ignored_storage_without_changing_the_repository()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write("project.csproj", "<Project />");
+        repository.Write("src/tracked.cs", "tracked source");
+        repository.Write(".gitignore", "obj/\nlocal-state/\nbelow-threshold/\n");
+        await repository.CommitAllAsync("add audit fixture");
+        repository.WriteBytes("obj/artifact.bin", 31);
+        repository.WriteBytes("local-state/payload.bin", 13);
+        repository.WriteBytes("local-state/space λ/payload.bin", 17);
+        repository.WriteBytes("below-threshold/empty.bin", 0);
+        var beforeStatus = await repository.GitAsync(
+            "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching");
+        var before = SnapshotWorkingTree(repository.Path);
+
+        var result = await RunExecutableAsync([
+            "audit", repository.Path, "--min-size", "1B", "--format", "json", "--no-progress",
+        ]);
+
+        var afterStatus = await repository.GitAsync(
+            "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching");
+        var after = SnapshotWorkingTree(repository.Path);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        var root = document.RootElement;
+        Assert.Equal("audit", root.GetProperty("operation").GetString());
+        Assert.Equal("success", root.GetProperty("status").GetString());
+        Assert.Equal(1, root.GetProperty("totals").GetProperty("repositoryCount").GetInt64());
+        Assert.Equal(1, root.GetProperty("totals").GetProperty("findingCount").GetInt64());
+        Assert.Equal(2, root.GetProperty("totals").GetProperty("fileCount").GetInt64());
+        Assert.Equal(30, root.GetProperty("totals").GetProperty("estimatedBytes").GetInt64());
+        var finding = Assert.Single(root.GetProperty("repositories")[0]
+            .GetProperty("findings")
+            .EnumerateArray());
+        Assert.Equal("local-state", finding.GetProperty("relativePath").GetString());
+        Assert.Equal(2, finding.GetProperty("fileCount").GetInt64());
+        Assert.Equal(30, finding.GetProperty("estimatedBytes").GetInt64());
+        Assert.Equal(".gitignore", finding.GetProperty("ignoreSource").GetString());
+        Assert.Equal(2, finding.GetProperty("ignoreSourceLine").GetInt32());
+        Assert.Equal("local-state/", finding.GetProperty("ignorePattern").GetString());
+        Assert.Equal(beforeStatus, afterStatus);
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
     public async Task Portable_pre_cancelled_json_operation_returns_130_without_console_noise()
     {
         using var temporary = new TemporaryDirectory();
@@ -339,6 +386,7 @@ public sealed class EndToEndTests
         Assert.Contains("--details", executableHelp.Stdout, StringComparison.Ordinal);
         Assert.Contains("--verbose", executableHelp.Stdout, StringComparison.Ordinal);
         Assert.Contains("--no-progress", executableHelp.Stdout, StringComparison.Ordinal);
+        Assert.Contains("repoglean audit", executableHelp.Stdout, StringComparison.Ordinal);
         Assert.True(File.Exists(readmePath), "README.md must document the supported RepoGlean surface.");
         Assert.True(File.Exists(schemaPath), "The configuration JSON Schema must be published.");
         Assert.True(File.Exists(ciPath), "The cross-platform CI workflow must be published.");
@@ -358,6 +406,10 @@ public sealed class EndToEndTests
         Assert.Contains("stderr", readme, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("--verbose --format json", readme, StringComparison.Ordinal);
         Assert.Contains("repoglean plan", readme, StringComparison.Ordinal);
+        Assert.Contains("repoglean audit", readme, StringComparison.Ordinal);
+        Assert.Contains("100 MiB", readme, StringComparison.Ordinal);
+        Assert.Contains("ignored-but-unclassified", readme, StringComparison.Ordinal);
+        Assert.Contains("not cleanup candidates", readme, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("planner cannot authorize deletion", readme, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("logical-size estimates", readme, StringComparison.Ordinal);
 
@@ -366,6 +418,7 @@ public sealed class EndToEndTests
         Assert.Contains("clean", smoke, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Native reclaim plan", smoke, StringComparison.Ordinal);
         Assert.Contains("Native reclaim dry run", smoke, StringComparison.Ordinal);
+        Assert.Contains("Native audit", smoke, StringComparison.Ordinal);
 
         var ci = await File.ReadAllTextAsync(ciPath);
         var release = await File.ReadAllTextAsync(releasePath);
@@ -474,6 +527,23 @@ public sealed class EndToEndTests
             match.Groups["repository"].Value);
     }
 
+    private static IReadOnlyList<WorkingTreeEntry> SnapshotWorkingTree(string root) =>
+        Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+            .Select(path => new
+            {
+                Path = path,
+                RelativePath = Path.GetRelativePath(root, path),
+            })
+            .Where(entry =>
+                !entry.RelativePath.Equals(".git", StringComparison.Ordinal) &&
+                !entry.RelativePath.StartsWith($".git{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(entry => new WorkingTreeEntry(
+                entry.RelativePath,
+                Directory.Exists(entry.Path),
+                Directory.Exists(entry.Path) ? null : Convert.ToHexString(File.ReadAllBytes(entry.Path))))
+            .OrderBy(entry => entry.RelativePath, StringComparer.Ordinal)
+            .ToArray();
+
     private static async Task<ProcessResult> RunExecutableAsync(
         IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string?>? environment = null) =>
@@ -553,6 +623,8 @@ public sealed class EndToEndTests
     private sealed record ReportTotals(long RepositoryCount, long CandidateCount, long FileCount, long EstimatedBytes);
 
     private sealed record TableRepositoryTotals(string EstimatedBytes, int CandidateCount, long FileCount, string RepositoryPath);
+
+    private sealed record WorkingTreeEntry(string RelativePath, bool IsDirectory, string? Bytes);
 
     private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 }

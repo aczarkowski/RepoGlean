@@ -1,6 +1,6 @@
 # RepoGlean
 
-RepoGlean is a stateless, cross-platform command-line tool that finds regenerable development artifacts in Git working trees, reports their estimated logical size, and can permanently remove an explicitly selected set. Git is the authority: an item is eligible only when it is ignored by Git and matches an active built-in or custom rule. Unknown ignored content is never selected.
+RepoGlean is a stateless, cross-platform command-line tool that finds regenerable development artifacts in Git working trees, reports their estimated logical size, and can permanently remove an explicitly selected set. Git is the authority: an item is eligible only when it is ignored by Git and matches an active built-in or custom rule. Unknown ignored content is never selected; the read-only `audit` command can report significant ignored-but-unclassified storage for human review without expanding cleanup authority.
 
 RepoGlean 2.2.0 is a .NET 10 Native AOT executable for Windows, macOS, and Linux. It does not require a .NET runtime, but it does require the `git` executable on `PATH`.
 
@@ -54,6 +54,7 @@ RepoGlean also calls the C library's `statx(2)` entry point and requires the ker
 
 ```text
 repoglean scan [root ...] [options]
+repoglean audit [root ...] [options]
 repoglean plan [root ...] --free size [options]
 repoglean clean [root ...] [options]
 repoglean rules list [--format table|json] [--config path]
@@ -61,7 +62,7 @@ repoglean config path|show|validate [--config path]
 repoglean help | --help | version | --version
 ```
 
-With no arguments, RepoGlean prints help. `scan` and `plan` never change files. `plan` requires a positive `--free` target and recommends eligible artifacts estimated to meet it. `clean --free` uses that same fixed recommendation; without `--free`, existing cleanup behavior is unchanged. `clean --dry-run` performs the same discovery, filtering, selection, and safety validation as cleanup, but does not delete. Interactive cleanup requires the exact lowercase confirmation `delete`. Pressing Enter at the ordinary artifact prompt honors command-line opt-ins: `clean --all` includes dependency artifacts, and an explicit category such as `--category dependency` selects matching artifacts.
+With no arguments, RepoGlean prints help. `scan`, `audit`, and `plan` never change files. `audit` reports Git-ignored storage that no active rule classifies; its findings are evidence for review, not cleanup candidates. `plan` requires a positive `--free` target and recommends eligible artifacts estimated to meet it. `clean --free` uses that same fixed recommendation; without `--free`, existing cleanup behavior is unchanged. `clean --dry-run` performs the same discovery, filtering, selection, and safety validation as cleanup, but does not delete. Interactive cleanup requires the exact lowercase confirmation `delete`. Pressing Enter at the ordinary artifact prompt honors command-line opt-ins: `clean --all` includes dependency artifacts, and an explicit category such as `--category dependency` selects matching artifacts.
 
 ### Command-specific option matrix
 
@@ -69,23 +70,23 @@ Options outside the listed commands are usage errors with exit code 2.
 
 | Option | Allowed commands | Meaning |
 | --- | --- | --- |
-| `root ...` | `scan`, `plan`, `clean` | Search these roots; positional and repeatable. |
-| `--repo name-or-path` | `scan`, `plan`, `clean` | Include a repository by leaf name or full path; repeatable. |
+| `root ...` | `scan`, `audit`, `plan`, `clean` | Search these roots; positional and repeatable. |
+| `--repo name-or-path` | `scan`, `audit`, `plan`, `clean` | Include a repository by leaf name or full path; repeatable. |
 | `--category value` | `scan`, `plan`, `clean` | Include `build`, `cache`, `test`, `ide`, or `dependency`; repeatable. Selecting `dependency` explicitly opts in dependency artifacts. |
-| `--exclude path-or-glob` | `scan`, `plan`, `clean` | Add a root-relative path, absolute path, or repository-relative glob exclusion; repeatable. |
-| `--min-size size` | `scan`, `plan`, `clean` | Require an estimated minimum size such as `500MB` or `2GiB`. |
-| `--all-drives` | `scan`, `plan`, `clean` | Add accessible fixed-drive roots to the requested roots. |
+| `--exclude path-or-glob` | `scan`, `audit`, `plan`, `clean` | Add a root-relative path, absolute path, or repository-relative glob exclusion; repeatable. |
+| `--min-size size` | `scan`, `audit`, `plan`, `clean` | Require an estimated minimum size such as `500MB` or `2GiB`; audit defaults to `100 MiB` and also accepts the exact value `0`. |
+| `--all-drives` | `scan`, `audit`, `plan`, `clean` | Add accessible fixed-drive roots to the requested roots. |
 | `--details` | `scan` | Include candidate rows in the final scan report. |
 | `--free size` | `plan`, `clean` | Request a positive estimated reclaim target such as `5GB` or `20GiB`; required for `plan`. |
 | `--dry-run` | `clean` | Validate and report selected candidates without deletion or prompts. |
 | `--yes` | `clean` | Run unattended; requires an explicit `--free`, `--all`, `--repo`, or `--category` scope. |
 | `--all` | `plan`, `clean` | Explicitly include dependency artifacts in the planning or cleanup pool. |
-| `--format value` | `scan`, `plan`, `clean`, `rules list` | Select `table` or the versioned `json` document. |
-| `--config path` | `scan`, `plan`, `clean`, `rules list`, `config path`, `config show`, `config validate` | Resolve or load an explicit configuration path. |
-| `--quiet` | `scan`, `plan`, `clean` | Suppress progress, narration, and detailed report sections while retaining the summary and genuine errors. |
-| `--verbose` | `scan`, `plan`, `clean` | Narrate meaningful operation stages on stderr and include detailed final diagnostics. |
-| `--no-color` | `scan`, `plan`, `clean` | Disable ANSI styling; redirected and JSON output are never colored. |
-| `--no-progress` | `scan`, `plan`, `clean` | Disable automatic interactive animation; explicit verbose milestones remain enabled. |
+| `--format value` | `scan`, `audit`, `plan`, `clean`, `rules list` | Select `table` or the versioned `json` document. |
+| `--config path` | `scan`, `audit`, `plan`, `clean`, `rules list`, `config path`, `config show`, `config validate` | Resolve or load an explicit configuration path. |
+| `--quiet` | `scan`, `audit`, `plan`, `clean` | Suppress progress, narration, and detailed report sections while retaining the summary and genuine errors. |
+| `--verbose` | `scan`, `audit`, `plan`, `clean` | Narrate meaningful operation stages on stderr and include detailed final diagnostics. |
+| `--no-color` | `scan`, `audit`, `plan`, `clean` | Disable ANSI styling; redirected and JSON output are never colored. |
+| `--no-progress` | `scan`, `audit`, `plan`, `clean` | Disable automatic interactive animation; explicit verbose milestones remain enabled. |
 | `--help` | Standalone, or with a complete command and no other options | Show global help instead of running the command. |
 | `--version` | Standalone, or with a complete command and no other options | Show the version instead of running the command. |
 
@@ -112,6 +113,12 @@ repoglean scan ~/src --verbose --format json > report.json 2> scan.log
 # Produce a JSON report for CI or another program.
 repoglean scan ~/src --format json --no-progress
 
+# Report ignored storage that active rules do not classify, without changing it.
+repoglean audit ~/src
+
+# Include every non-empty ignored-but-unclassified finding in one JSON document.
+repoglean audit ~/src --min-size 0 --format json --no-progress
+
 # Plan a target that the eligible pool can meet without changing files.
 repoglean plan ~/src --free 5GiB
 
@@ -137,6 +144,18 @@ repoglean clean ~/src --yes --repo example --category build --format json
 repoglean clean ~/src --yes --category dependency
 ```
 
+### Unclassified storage audit
+
+`repoglean audit [root ...] [options]` is a strictly read-only inventory of Git-ignored storage inside discovered working trees that no active built-in or custom rule classifies. Audit findings are unclassified evidence, not cleanup candidates; they do not assert that content is safe, eligible, regenerable, reclaimable, or deletable, and they cannot flow into planning or cleanup. RepoGlean does not generate or enable rules from findings.
+
+Audit uses the same roots, repository filters, exclusions, drive discovery, configuration, reporting, and progress controls shown in the option matrix. Command-line roots take precedence over configured roots, which take precedence over the user-home default. The default minimum finding size is exactly `100 MiB` (104,857,600 logical bytes). A positive `--min-size` uses the ordinary byte-size syntax; audit alone accepts the exact value `0`, which removes the size threshold while still requiring a countable regular file.
+
+Each finding is the highest honest, non-overlapping ignored tree whose totals describe only unclassified content. Active-rule branches are carved out even when scan would reject them as cleanup candidates, and tracked or otherwise Git-visible branches are not counted. Disabled built-in rules do not classify matching paths. Thresholding happens after those branches are removed, so a large ignored parent can fall below the threshold when its recognized content is excluded.
+
+Git is the sole authority for ignored status and provenance. Each finding includes the matching ignore source, nullable source line, and pattern when Git supplies them. Repository-contained sources are reported relative to the repository; external sources are normalized absolute paths. RepoGlean does not parse `.gitignore` itself. It also does not follow filesystem links or cross mounts, enter nested repositories or reserved quarantine trees, or guess when Git or filesystem state is uncertain; affected paths are omitted with warnings.
+
+Audit sizes are saturating logical file-length estimates, not physical allocation or guaranteed free space. The audit is an advisory snapshot of files observed during its read-only walk. It never modifies repository content, Git state, configuration, or ignore rules.
+
 ### Reclaim planning
 
 The built-in `balanced` planner uses a fixed, deterministic order. It considers disruption tiers from least to most disruptive—`test`, `build`, `cache`, `ide`, then explicitly opted-in `dependency`—and within each tier ranks `dormant` artifacts at least 30 days old before `stale` artifacts at least 7 but less than 30 days old, then `recent-or-unknown` artifacts. Future and unavailable timestamps rank as recent or unknown; timestamps affect order only, never eligibility or safety authority.
@@ -149,7 +168,7 @@ For `clean --free --dry-run`, target achievement is based on selected bytes that
 
 The default path is `%APPDATA%\repoglean\config.json` on Windows and `$XDG_CONFIG_HOME/repoglean/config.json` on macOS/Linux. If `XDG_CONFIG_HOME` is unset, macOS/Linux use `~/.config/repoglean/config.json`. A genuinely absent implicit default file produces the empty version 1 defaults. Supplying `--config` is explicit: commands that load configuration fail with exit code 2 when that path is missing, is a directory, is unreadable, or contains invalid configuration. `repoglean config path` only prints the resolved path, `config show` prints the effective document, and `config validate` validates it without requiring Git.
 
-Command-line roots take precedence over configured `roots`; configured roots take precedence over the user home directory default. Command-line `--exclude` values are added to configured `excludes`. Other command-line filters narrow the discovered candidates.
+Command-line roots take precedence over configured `roots`; configured roots take precedence over the user home directory default. Command-line `--exclude` values are added to configured `excludes`. Other command-line filters narrow the discovered candidates or audit findings. Disabled built-in rules and custom rules also affect audit classification: only active rules remove matching storage from audit results.
 
 The published [JSON Schema](docs/configuration.schema.json) describes schema version 1. The loader accepts comments, trailing commas, case-insensitive property names and named categories, and unknown properties for forward compatibility; generated output uses canonical camelCase names. If recognized properties are repeated with different casing, the last valid value wins; all occurrences must be valid. For strict JSON documents, schema-aware tooling applies the same property and value contract.
 
@@ -231,18 +250,20 @@ Normal redirected execution is silent on stderr unless RepoGlean has a genuine w
 
 JSON integer fields are byte/file/count values, `schemaVersion` is currently `1`, and the stable top-level fields are:
 
-- `schemaVersion`, `operation` (`scan`, `plan`, or `clean`), and `status` (`success`, `partial`, `failed`, or `interrupted`);
+- `schemaVersion`, `operation` (`scan`, `audit`, `plan`, or `clean`), and `status` (`success`, `partial`, `failed`, or `interrupted`);
 - `effectiveRoots`, `repositories`, `totals`, `warnings`, and `errors`;
 - `rules` for `rules list`, `plan` for planning reports, and `cleanup` for clean reports.
+
+Audit uses a dedicated schema-version-1 document rather than candidate or cleanup models. Its top-level envelope is `schemaVersion`, `operation: "audit"`, `status`, `effectiveRoots`, `repositories`, `totals`, `warnings`, and `errors`. Each repository contains `root`, `findings`, `fileCount`, and `estimatedBytes`; each finding contains its paths, file count, logical estimated bytes, nullable newest-write timestamp, and nullable ignore source, line, and pattern. Audit totals contain `repositoryCount`, `findingCount`, `fileCount`, and `estimatedBytes`. Existing scan, plan, and clean JSON shapes are unchanged.
 
 Cleanup candidates add `outcome`, `message`, and `deletionCompleted`; target-based cleanup also adds `cleanup.reclaimTarget` with requested, planned, safety-validated, and completed-deletion accounting. The cleanup summary distinguishes originally selected candidates from processed, irreversibly deleted, skipped, and failed candidates. `deletionCompleted` can be true even when the overall item is failed because post-delete empty-quarantine cleanup failed. Automation should parse fields rather than table text and must check the process exit code:
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | Success, user-canceled interactive cleanup, or no candidates. |
+| `0` | Success, user-canceled interactive cleanup, no candidates, or a completed audit with no findings. |
 | `1` | Fatal operational failure, including unavailable Git. |
 | `2` | Invalid invocation or configuration. |
-| `3` | Partial result: target shortfall, warnings, safety skips, or per-candidate failures. |
+| `3` | Partial result: target shortfall, warnings (including omitted audit paths), safety skips, or per-candidate failures. |
 | `130` | Interrupted operation. |
 
 Reported sizes are estimates: RepoGlean sums logical file lengths, saturating at the maximum signed 64-bit integer. They are not filesystem block usage or promised reclaimed capacity, and may differ because of sparse files, compression, clones, hard links, metadata, or concurrent change. `estimatedDeletedBytes` counts candidates whose payload deletion completed, independently of later quarantine-cleanup status.
@@ -262,4 +283,4 @@ dotnet test RepoGlean.slnx --no-build
 dotnet publish src/RepoGlean/RepoGlean.csproj -c Release -r osx-arm64 --self-contained -p:PublishAot=true
 ```
 
-CI runs the warning-as-error build, full tests, and `eng/native-smoke.ps1` against the final package-named host Native AOT executable on Windows, macOS, and Linux. The smoke creates a disposable real Git repository, parses JSON scan and scoped-clean results, and proves protected content survives. A `v*` tag runs the same packaged-executable smoke for all six release RIDs on matching-architecture runners before archiving the executable with `LICENSE` and `README.md`, generating SHA-256 files, and attaching everything to the GitHub release.
+CI runs the warning-as-error build, full tests, and `eng/native-smoke.ps1` against the final package-named host Native AOT executable on Windows, macOS, and Linux. The smoke creates a disposable real Git repository, parses JSON scan, audit, plan, and scoped-clean results, proves audit leaves its fixtures intact, and proves cleanup preserves protected content. A `v*` tag runs the same packaged-executable smoke for all six release RIDs on matching-architecture runners before archiving the executable with `LICENSE` and `README.md`, generating SHA-256 files, and attaching everything to the GitHub release.

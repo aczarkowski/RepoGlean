@@ -76,7 +76,7 @@ try {
     & git -C $repository config user.name "RepoGlean Smoke"
 
     New-Item -ItemType Directory -Path (Join-Path $repository "tracked") -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $repository ".gitignore") -Value "obj/`nnode_modules/"
+    Set-Content -LiteralPath (Join-Path $repository ".gitignore") -Value "obj/`nnode_modules/`naudit-state/"
     Set-Content -LiteralPath (Join-Path $repository "project.csproj") -Value "<Project />"
     Set-Content -LiteralPath (Join-Path $repository "package.json") -Value "{}"
     Set-Content -LiteralPath (Join-Path $repository "tracked/keep.txt") -Value "tracked content"
@@ -86,9 +86,13 @@ try {
 
     New-Item -ItemType Directory -Path (Join-Path $repository "obj") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $repository "node_modules") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $repository "audit-state") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $repository "unrelated") -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $repository "obj/artifact.bin") -Value "build output"
     Set-Content -LiteralPath (Join-Path $repository "node_modules/package.bin") -Value "dependency output"
+    $auditPayloadPath = Join-Path $repository "audit-state/payload.bin"
+    Set-Content -LiteralPath $auditPayloadPath -Value "unclassified ignored state"
+    $auditPayloadBefore = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($auditPayloadPath))
     Set-Content -LiteralPath (Join-Path $repository "unrelated/keep.txt") -Value "untracked content"
     $configPath = Join-Path $smokeRoot "config.json"
     Set-Content -LiteralPath $configPath -Value '{"schemaVersion":1}' -NoNewline
@@ -101,6 +105,39 @@ try {
     $candidatePaths = @($scan.repositories | ForEach-Object { $_.candidates } | ForEach-Object { $_.relativePath })
     if ($candidatePaths -notcontains "obj" -or $candidatePaths -notcontains "node_modules") {
         throw "Native scan did not report both build and dependency fixtures."
+    }
+
+    $audit = Invoke-JsonCommand -Arguments @(
+        "audit", $repository, "--min-size", "1B",
+        "--config", $configPath, "--format", "json", "--no-progress"
+    )
+    if ($audit.operation -ne "audit" -or
+        $audit.status -ne "success" -or
+        $audit.totals.findingCount -ne 1 -or
+        $audit.repositories[0].findings[0].relativePath -ne "audit-state") {
+        throw "Native audit returned an unexpected JSON result."
+    }
+    $auditFindingPaths = @(
+        $audit.repositories |
+            ForEach-Object { $_.findings } |
+            ForEach-Object { $_.relativePath }
+    )
+    if ($auditFindingPaths -contains "obj" -or $auditFindingPaths -contains "node_modules") {
+        throw "Native audit reported a recognized artifact as unclassified storage."
+    }
+    $auditPayloadAfter = if (Test-Path -LiteralPath $auditPayloadPath) {
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($auditPayloadPath))
+    }
+    else {
+        $null
+    }
+    if ($auditPayloadAfter -ne $auditPayloadBefore -or
+        -not (Test-Path -LiteralPath (Join-Path $repository "obj/artifact.bin")) -or
+        -not (Test-Path -LiteralPath (Join-Path $repository "node_modules/package.bin")) -or
+        -not (Test-Path -LiteralPath (Join-Path $repository "tracked/keep.txt")) -or
+        -not (Test-Path -LiteralPath (Join-Path $repository "unrelated/keep.txt")) -or
+        -not (Test-Path -LiteralPath (Join-Path $repository ".git"))) {
+        throw "Native audit changed or removed a fixture."
     }
 
     $plan = Invoke-JsonCommand -Arguments @(
@@ -152,6 +189,7 @@ try {
 
     if (Test-Path -LiteralPath (Join-Path $repository "obj")) { throw "Scoped cleanup left the selected build artifact behind." }
     if (-not (Test-Path -LiteralPath (Join-Path $repository "node_modules/package.bin"))) { throw "Scoped cleanup removed an opt-in dependency artifact." }
+    if (-not (Test-Path -LiteralPath $auditPayloadPath)) { throw "Scoped cleanup removed unclassified audit storage." }
     if (-not (Test-Path -LiteralPath (Join-Path $repository "tracked/keep.txt"))) { throw "Scoped cleanup removed tracked content." }
     if (-not (Test-Path -LiteralPath (Join-Path $repository "unrelated/keep.txt"))) { throw "Scoped cleanup removed unrelated untracked content." }
     if (-not (Test-Path -LiteralPath (Join-Path $repository ".git"))) { throw "Scoped cleanup removed Git metadata." }

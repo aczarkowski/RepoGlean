@@ -74,7 +74,7 @@ public sealed class GitClient
         string excludedRepositoryRelativePath,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(excludedRepositoryRelativePath);
+        ArgumentException.ThrowIfNullOrEmpty(excludedRepositoryRelativePath);
         ValidateRelativePath(excludedRepositoryRelativePath);
         return ListVisibleFilesCoreAsync(repositoryRoot, NormalizeRelativePath(excludedRepositoryRelativePath), cancellationToken);
     }
@@ -113,7 +113,7 @@ public sealed class GitClient
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRelativePath);
+        ArgumentException.ThrowIfNullOrEmpty(repositoryRelativePath);
         ValidateRelativePath(repositoryRelativePath);
 
         var result = await runner.RunAsync(
@@ -134,8 +134,8 @@ public sealed class GitClient
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRelativePath);
-        ValidateRelativePath(repositoryRelativePath.TrimEnd('/'));
+        ArgumentException.ThrowIfNullOrEmpty(repositoryRelativePath);
+        ValidateRelativePath(repositoryRelativePath);
         var result = await runner.RunAsync(
             ["-C", Path.GetFullPath(repositoryRoot), "check-ignore", "--no-index", "-q", "--", NormalizeRelativePath(repositoryRelativePath)],
             null,
@@ -159,7 +159,7 @@ public sealed class GitClient
         for (var index = 0; index < repositoryRelativePaths.Count; index++)
         {
             var path = repositoryRelativePaths[index];
-            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            ArgumentException.ThrowIfNullOrEmpty(path);
             ValidateRelativePath(path);
             normalizedPaths[index] = NormalizeRelativePath(path);
         }
@@ -207,7 +207,7 @@ public sealed class GitClient
         for (var index = 0; index < repositoryRelativePaths.Count; index++)
         {
             var path = repositoryRelativePaths[index];
-            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            ArgumentException.ThrowIfNullOrEmpty(path);
             ValidateRelativePath(path);
             normalizedPaths[index] = NormalizeRelativePath(path);
         }
@@ -248,7 +248,7 @@ public sealed class GitClient
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRelativePath);
+        ArgumentException.ThrowIfNullOrEmpty(repositoryRelativePath);
         ValidateRelativePath(repositoryRelativePath);
         var result = await runner.RunAsync(
             ["-C", Path.GetFullPath(repositoryRoot), "ls-files", "-z", "--", NormalizeRelativePath(repositoryRelativePath)],
@@ -260,10 +260,13 @@ public sealed class GitClient
 
     private static void ValidateRelativePath(string repositoryRelativePath)
     {
-        if (Path.IsPathRooted(repositoryRelativePath) ||
+        if (repositoryRelativePath.Contains('\0', StringComparison.Ordinal) ||
+            Path.IsPathRooted(repositoryRelativePath) ||
             NormalizeRelativePath(repositoryRelativePath).Split('/').Any(segment => segment is "." or ".."))
         {
-            throw new ArgumentException("Git paths must be repository-relative and cannot contain dot segments.", nameof(repositoryRelativePath));
+            throw new ArgumentException(
+                "Git paths must be repository-relative and cannot contain NUL or dot segments.",
+                nameof(repositoryRelativePath));
         }
     }
 
@@ -273,7 +276,7 @@ public sealed class GitClient
         return normalized.TrimStart('/');
     }
 
-    private static IReadOnlyList<GitIgnoreMatch> ParseIgnoreMatches(string output, IReadOnlyList<string> requestedPaths)
+    internal static IReadOnlyList<GitIgnoreMatch> ParseIgnoreMatches(string output, IReadOnlyList<string> requestedPaths)
     {
         var fields = output.Split('\0');
         if (fields.Length == 1 && fields[0].Length == 0)

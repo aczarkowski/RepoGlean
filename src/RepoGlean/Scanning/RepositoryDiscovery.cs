@@ -187,12 +187,14 @@ public sealed class RepositoryDiscovery
                 continue;
             }
 
-            var pending = new Stack<string>();
-            pending.Push(root);
+            var pending = new Stack<(string Path, bool InsideDiscoveredRepository)>();
+            pending.Push((root, false));
             while (pending.Count > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var path = pending.Pop();
+                var pendingItem = pending.Pop();
+                var path = pendingItem.Path;
+                var insideDiscoveredRepository = pendingItem.InsideDiscoveredRepository;
                 if (string.Equals(Path.GetFileName(path), ".git", StringComparison.OrdinalIgnoreCase) ||
                     IsExcluded(path, root, configuredExclusions) ||
                     IsImplicitlyExcluded(path, root))
@@ -203,7 +205,13 @@ public sealed class RepositoryDiscovery
                 if (!TryGetAttributes(path, warnings, out var attributes)) continue;
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
-                    AddWarning(warnings, new OperationWarning(path, "Skipped directory link, junction, or reparse point."));
+                    var auditWillClassifyRepositoryLink = operation == ProgressOperation.Audit &&
+                        insideDiscoveredRepository;
+                    if (!auditWillClassifyRepositoryLink)
+                    {
+                        AddWarning(warnings, new OperationWarning(path, "Skipped directory link, junction, or reparse point."));
+                    }
+
                     continue;
                 }
 
@@ -226,6 +234,7 @@ public sealed class RepositoryDiscovery
                         if (await git.IsWorkingTreeAsync(path, cancellationToken).ConfigureAwait(false))
                         {
                             var repository = Path.GetFullPath(path);
+                            insideDiscoveredRepository = true;
                             if (repositories.Add(repository))
                             {
                                 ReportProgress(new OperationProgressEvent(
@@ -247,7 +256,10 @@ public sealed class RepositoryDiscovery
                     foreach (var child in Directory.EnumerateDirectories(path))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (!string.Equals(Path.GetFileName(child), ".git", StringComparison.OrdinalIgnoreCase)) pending.Push(child);
+                        if (!string.Equals(Path.GetFileName(child), ".git", StringComparison.OrdinalIgnoreCase))
+                        {
+                            pending.Push((child, insideDiscoveredRepository));
+                        }
                     }
                 }
                 catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)

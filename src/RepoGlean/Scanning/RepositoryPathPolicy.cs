@@ -52,13 +52,27 @@ internal static class RepositoryPathPolicy
 
     internal static bool ContainsVisibleContent(
         string candidateRelativePath,
-        IReadOnlyList<string> visiblePaths)
+        IReadOnlyList<string> visiblePaths) =>
+        ContainsVisibleContent(candidateRelativePath, visiblePaths, PathComparison);
+
+    internal static bool ContainsVisibleContent(
+        string candidateRelativePath,
+        IReadOnlyList<string> visiblePaths,
+        StringComparison comparison)
     {
-        var prefix = candidateRelativePath.EndsWith("/", StringComparison.Ordinal)
+        var prefix = candidateRelativePath.EndsWith("/", comparison)
             ? candidateRelativePath
             : $"{candidateRelativePath}/";
         return visiblePaths.Any(path =>
-            string.Equals(path, candidateRelativePath, StringComparison.Ordinal) ||
-            path.StartsWith(prefix, StringComparison.Ordinal));
+            string.Equals(path, candidateRelativePath, comparison) ||
+            path.StartsWith(prefix, comparison));
     }
+
+    internal static IReadOnlySet<string> CreateVisiblePathSet(IReadOnlyList<string> visiblePaths) =>
+        CreateVisiblePathSet(visiblePaths, PathComparer);
+
+    internal static IReadOnlySet<string> CreateVisiblePathSet(
+        IReadOnlyList<string> visiblePaths,
+        StringComparer comparer) =>
+        new HashSet<string>(visiblePaths, comparer);
 }

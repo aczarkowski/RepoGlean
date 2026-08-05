@@ -190,6 +190,98 @@ public sealed class AuditCommandTests
         Assert.Equal("ignored", File.ReadAllText(repository.GetPath("ignored/payload.txt")));
     }
 
+    [Fact]
+    public async Task Audit_silently_carves_a_tracked_symbolic_link_and_remains_successful()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        var external = temporary.GetPath("external");
+        Directory.CreateDirectory(external);
+        File.WriteAllBytes(Path.Combine(external, "outside.bin"), new byte[31]);
+        Directory.CreateSymbolicLink(repository.GetPath("visible-link"), external);
+        await repository.CommitAllAsync();
+
+        var result = await RunAsync(["audit", repository.Path, "--min-size", "0", "--format", "json"]);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
+        Assert.Empty(document.RootElement.GetProperty("warnings").EnumerateArray());
+        Assert.Equal(0, document.RootElement.GetProperty("totals").GetProperty("estimatedBytes").GetInt64());
+    }
+
+    [Fact]
+    public async Task Audit_silently_carves_a_classified_ignored_symbolic_link_and_remains_successful()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write("project.csproj", "<Project />");
+        repository.Write(".gitignore", "obj\n");
+        await repository.CommitAllAsync();
+        var external = temporary.GetPath("external");
+        Directory.CreateDirectory(external);
+        File.WriteAllBytes(Path.Combine(external, "outside.bin"), new byte[31]);
+        Directory.CreateSymbolicLink(repository.GetPath("obj"), external);
+
+        var result = await RunAsync(["audit", repository.Path, "--min-size", "0", "--format", "json"]);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
+        Assert.Empty(document.RootElement.GetProperty("warnings").EnumerateArray());
+        Assert.Equal(0, document.RootElement.GetProperty("totals").GetProperty("estimatedBytes").GetInt64());
+    }
+
+    [Fact]
+    public async Task Audit_warns_for_an_unclassified_ignored_symbolic_link_and_remains_partial()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "unknown\n");
+        await repository.CommitAllAsync();
+        var external = temporary.GetPath("external");
+        Directory.CreateDirectory(external);
+        File.WriteAllBytes(Path.Combine(external, "outside.bin"), new byte[31]);
+        var link = repository.GetPath("unknown");
+        Directory.CreateSymbolicLink(link, external);
+
+        var result = await RunAsync(["audit", repository.Path, "--min-size", "0", "--format", "json"]);
+
+        Assert.Equal(3, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("partial", document.RootElement.GetProperty("status").GetString());
+        var warning = Assert.Single(document.RootElement.GetProperty("warnings").EnumerateArray());
+        Assert.Equal(link, warning.GetProperty("path").GetString());
+        Assert.Contains("filesystem link", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Equal(0, document.RootElement.GetProperty("totals").GetProperty("estimatedBytes").GetInt64());
+    }
+
+    [Fact]
+    public async Task Audit_reports_whitespace_only_unix_paths_without_an_uncaught_argument_failure()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "*\n");
+        await repository.GitAsync("add", "-f", ".gitignore");
+        await repository.GitAsync("commit", "--quiet", "-m", "ignore all paths");
+        repository.WriteBytes(" ", 3);
+        repository.WriteBytes("\t", 5);
+        repository.WriteBytes("\n", 7);
+
+        var result = await RunAsync(["audit", repository.Path, "--min-size", "0", "--format", "json"]);
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("success", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(3, document.RootElement.GetProperty("totals").GetProperty("findingCount").GetInt64());
+        Assert.Equal(15, document.RootElement.GetProperty("totals").GetProperty("estimatedBytes").GetInt64());
+        Assert.Empty(document.RootElement.GetProperty("warnings").EnumerateArray());
+    }
+
     private static async Task<GitTestRepository> CreateAuditRepositoryAsync(
         string path,
         string ignoredDirectory,

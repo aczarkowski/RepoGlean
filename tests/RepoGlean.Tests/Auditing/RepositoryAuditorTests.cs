@@ -334,6 +334,26 @@ public sealed class RepositoryAuditorTests
     }
 
     [Fact]
+    public async Task Audit_accepts_nonempty_whitespace_only_unix_file_names()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "*\n");
+        await repository.GitAsync("add", "-f", ".gitignore");
+        await repository.GitAsync("commit", "--quiet", "-m", "ignore all paths");
+        var expected = new[] { (Path: " ", Size: 3), (Path: "\t", Size: 5), (Path: "\n", Size: 7) };
+        foreach (var item in expected) repository.WriteBytes(item.Path, item.Size);
+
+        var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
+
+        Assert.Equal(expected.OrderByDescending(item => item.Size).Select(item => item.Path),
+            result.Repositories.Single().Findings.Select(finding => finding.RelativePath));
+        Assert.Equal(15, result.EstimatedBytes);
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
     public async Task Audit_preserves_unix_backslashes_without_creating_artificial_dot_segments()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -417,6 +437,88 @@ public sealed class RepositoryAuditorTests
             result.Warnings);
         Assert.True(File.Exists(externalPayload));
         Assert.Equal(29, new FileInfo(externalPayload).Length);
+    }
+
+    [Fact]
+    public async Task Audit_omits_a_directory_swapped_to_a_same_mount_link_immediately_before_secure_enumeration()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "unknown\n");
+        await repository.CommitAllAsync();
+        var target = repository.GetPath("unknown");
+        repository.WriteBytes("unknown/local.bin", 7);
+        var relocated = repository.GetPath("relocated-original");
+        var external = temporary.GetPath("external");
+        Directory.CreateDirectory(external);
+        var externalPayload = Path.Combine(external, "outside.bin");
+        File.WriteAllBytes(externalPayload, new byte[31]);
+        var swapped = false;
+        var auditor = new RepositoryAuditor(
+            new GitClient(),
+            new SecureAuditFileSystem(),
+            NullOperationProgress.Instance,
+            (checkpoint, path) =>
+            {
+                if (swapped || checkpoint != SecureAuditCheckpoint.BeforeDirectoryEnumeration || path != target) return;
+                swapped = true;
+                Directory.Move(target, relocated);
+                Directory.CreateSymbolicLink(target, external);
+            });
+
+        var result = await auditor.AuditAsync(
+            [repository.Path],
+            RuleCatalog.Create(RepoGleanConfig.Default),
+            new AuditOptions([], [], 0));
+
+        Assert.True(swapped);
+        Assert.Empty(result.Repositories.Single().Findings);
+        Assert.Equal(0, result.EstimatedBytes);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == target &&
+            warning.Message.Contains("changed identity or type during inspection", StringComparison.Ordinal));
+        Assert.Equal(31, new FileInfo(externalPayload).Length);
+    }
+
+    [Fact]
+    public async Task Audit_omits_a_file_swapped_to_a_same_mount_link_immediately_before_secure_measurement()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "unknown.bin\n");
+        await repository.CommitAllAsync();
+        var target = repository.GetPath("unknown.bin");
+        repository.WriteBytes("unknown.bin", 7);
+        var relocated = repository.GetPath("relocated-original.bin");
+        var external = temporary.GetPath("outside.bin");
+        File.WriteAllBytes(external, new byte[37]);
+        var swapped = false;
+        var auditor = new RepositoryAuditor(
+            new GitClient(),
+            new SecureAuditFileSystem(),
+            NullOperationProgress.Instance,
+            (checkpoint, path) =>
+            {
+                if (swapped || checkpoint != SecureAuditCheckpoint.BeforeFileMeasurement || path != target) return;
+                swapped = true;
+                File.Move(target, relocated);
+                File.CreateSymbolicLink(target, external);
+            });
+
+        var result = await auditor.AuditAsync(
+            [repository.Path],
+            RuleCatalog.Create(RepoGleanConfig.Default),
+            new AuditOptions([], [], 0));
+
+        Assert.True(swapped);
+        Assert.Empty(result.Repositories.Single().Findings);
+        Assert.Equal(0, result.EstimatedBytes);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == target &&
+            warning.Message.Contains("changed identity or type during inspection", StringComparison.Ordinal));
+        Assert.Equal(37, new FileInfo(external).Length);
     }
 
     [Fact]
@@ -569,6 +671,37 @@ public sealed class RepositoryAuditorTests
         Assert.Contains(result.Warnings, warning =>
             warning.Path == repository.GetPath("broken.bin") &&
             warning.Message.Contains("injected-check-ignore-failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Audit_recursively_isolates_malformed_provenance_without_suppressing_its_sibling()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "*.bin\n");
+        await repository.CommitAllAsync();
+        repository.WriteBytes("broken.bin", 13);
+        repository.WriteBytes("good.bin", 17);
+        var input = temporary.GetPath("check-ignore-input");
+        var wrapper = temporary.GetPath("git-wrapper");
+        File.WriteAllText(
+            wrapper,
+            "#!/bin/sh\nif [ \"$3\" = \"check-ignore\" ]; then cat > \"$REPOGLEAN_CHECK_IGNORE_INPUT\"; if tr '\\0' '\\n' < \"$REPOGLEAN_CHECK_IGNORE_INPUT\" | grep -Fxq 'broken.bin'; then printf 'malformed'; exit 0; fi; exec git \"$@\" < \"$REPOGLEAN_CHECK_IGNORE_INPUT\"; fi\nexec git \"$@\"\n");
+        File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var git = new GitClient(wrapper, new Dictionary<string, string?>
+        {
+            ["REPOGLEAN_CHECK_IGNORE_INPUT"] = input,
+        });
+
+        var result = await AuditAsync(git, [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
+
+        var finding = Assert.Single(result.Repositories.Single().Findings);
+        Assert.Equal("good.bin", finding.RelativePath);
+        Assert.Equal(17, finding.EstimatedBytes);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Path == repository.GetPath("broken.bin") &&
+            warning.Message.Contains("malformed or truncated", StringComparison.OrdinalIgnoreCase));
     }
 
     private static Task<AuditResult> AuditAsync(

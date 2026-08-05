@@ -6,6 +6,102 @@ namespace RepoGlean.Tests.Git;
 public sealed class GitClientTests
 {
     [Fact]
+    public async Task Verbose_ignore_matches_accept_nonempty_whitespace_only_unix_paths()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "*\n");
+        await repository.GitAsync("add", "-f", ".gitignore");
+        await repository.GitAsync("commit", "--quiet", "-m", "ignore all paths");
+        string[] paths = [" ", "\t", "\n"];
+        foreach (var path in paths) repository.Write(path, "ignored");
+
+        var matches = await new GitClient().GetIgnoreMatchesAsync(repository.Path, paths);
+
+        Assert.Equal(paths, matches.Keys);
+        Assert.All(matches.Values, match =>
+        {
+            Assert.True(match.IsIgnored);
+            Assert.Equal("*", match.Pattern);
+        });
+        var git = new GitClient();
+        foreach (var path in paths)
+        {
+            Assert.True(await git.IsIgnoredAsync(repository.Path, path));
+            Assert.True(await git.IsIgnoredWithoutIndexAsync(repository.Path, path));
+            Assert.Contains(path, await git.GetIgnoredPathsAsync(repository.Path, [path]));
+            Assert.False(await git.ContainsTrackedContentAsync(repository.Path, path));
+            await git.ListVisibleFilesExcludingAsync(repository.Path, path);
+        }
+    }
+
+    [Fact]
+    public async Task Verbose_ignore_matches_reject_a_null_path()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            new GitClient().GetIgnoreMatchesAsync(repository.Path, [null!]));
+    }
+
+    [Fact]
+    public async Task Git_path_apis_reject_embedded_nul_before_process_or_record_boundaries()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        var git = new GitClient();
+        const string path = "safe\0injected";
+
+        await Assert.ThrowsAsync<ArgumentException>(() => git.IsIgnoredAsync(repository.Path, path));
+        await Assert.ThrowsAsync<ArgumentException>(() => git.IsIgnoredWithoutIndexAsync(repository.Path, path));
+        await Assert.ThrowsAsync<ArgumentException>(() => git.GetIgnoredPathsAsync(repository.Path, [path]));
+        await Assert.ThrowsAsync<ArgumentException>(() => git.GetIgnoreMatchesAsync(repository.Path, [path]));
+        await Assert.ThrowsAsync<ArgumentException>(() => git.ContainsTrackedContentAsync(repository.Path, path));
+        await Assert.ThrowsAsync<ArgumentException>(() => git.ListVisibleFilesExcludingAsync(repository.Path, path));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("/absolute")]
+    [InlineData(".")]
+    [InlineData("../outside")]
+    [InlineData("safe/../outside")]
+    public async Task Verbose_ignore_matches_reject_empty_absolute_and_dot_segment_paths(string path)
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            new GitClient().GetIgnoreMatchesAsync(repository.Path, [path]));
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedProvenanceRecords))]
+    public void Verbose_ignore_parser_fails_closed_for_malformed_provenance(
+        string output,
+        string[] requestedPaths,
+        string expectedMessage)
+    {
+        var exception = Assert.Throws<GitCommandException>(() =>
+            GitClient.ParseIgnoreMatches(output, requestedPaths));
+
+        Assert.Contains(expectedMessage, exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static TheoryData<string, string[], string> MalformedProvenanceRecords => new()
+    {
+        { ".gitignore\01\0*\0one", ["one"], "malformed or truncated" },
+        { Record("one") + Record("one"), ["one", "two"], "duplicate or missing" },
+        { Record("one"), ["one", "two"], "duplicate or missing" },
+        { Record("other"), ["one"], "unexpected provenance path" },
+        { ".gitignore\0\0*\0one\0", ["one"], "incomplete provenance" },
+    };
+
+    private static string Record(string path) => $".gitignore\01\0*\0{path}\0";
+
+    [Fact]
     public async Task Verbose_ignore_matches_preserve_source_line_pattern_and_path()
     {
         using var temporary = new TemporaryDirectory();

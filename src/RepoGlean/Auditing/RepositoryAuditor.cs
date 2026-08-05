@@ -8,18 +8,17 @@ namespace RepoGlean.Auditing;
 public sealed class RepositoryAuditor
 {
     private readonly GitClient git;
-    private readonly IVolumeBoundary volumeBoundary;
-    private readonly IFileSystemEntryInspector entryInspector;
-    private readonly IFileTimestampProvider timestampProvider;
+    private readonly ISecureAuditFileSystem fileSystem;
     private readonly IOperationProgress progress;
+    private readonly Action<SecureAuditCheckpoint, string>? checkpoint;
 
     public RepositoryAuditor(GitClient git)
-        : this(git, new FileSystemIdentityProvider(), new FileTimestampProvider(), NullOperationProgress.Instance)
+        : this(git, new SecureAuditFileSystem(), NullOperationProgress.Instance, checkpoint: null)
     {
     }
 
     internal RepositoryAuditor(GitClient git, IOperationProgress progress)
-        : this(git, new FileSystemIdentityProvider(), new FileTimestampProvider(), progress)
+        : this(git, new SecureAuditFileSystem(), progress, checkpoint: null)
     {
     }
 
@@ -28,12 +27,20 @@ public sealed class RepositoryAuditor
         IVolumeBoundary volumeBoundary,
         IFileTimestampProvider timestampProvider,
         IOperationProgress progress)
+        : this(git, new SecureAuditFileSystem(volumeBoundary, timestampProvider), progress, checkpoint: null)
+    {
+    }
+
+    internal RepositoryAuditor(
+        GitClient git,
+        ISecureAuditFileSystem fileSystem,
+        IOperationProgress progress,
+        Action<SecureAuditCheckpoint, string>? checkpoint = null)
     {
         this.git = git ?? throw new ArgumentNullException(nameof(git));
-        this.volumeBoundary = volumeBoundary ?? throw new ArgumentNullException(nameof(volumeBoundary));
-        entryInspector = volumeBoundary as IFileSystemEntryInspector ?? new FileSystemIdentityProvider();
-        this.timestampProvider = timestampProvider ?? throw new ArgumentNullException(nameof(timestampProvider));
+        this.fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         this.progress = progress ?? throw new ArgumentNullException(nameof(progress));
+        this.checkpoint = checkpoint;
     }
 
     public Task<AuditResult> AuditAsync(
@@ -125,16 +132,14 @@ public sealed class RepositoryAuditor
             var activeRules = ruleCatalog.Rules
                 .Where(rule => rule.IsActiveFor(visiblePaths))
                 .ToArray();
-            if (!volumeBoundary.TryGetMountIdentity(
-                    repositoryRoot,
-                    out var repositoryMount,
-                    out var repositoryMountError) ||
-                repositoryMount is null)
+            var visiblePathSet = RepositoryPathPolicy.CreateVisiblePathSet(visiblePaths);
+            if (!fileSystem.TryOpenRoot(repositoryRoot, out var secureRoot, out var repositoryOpenError) ||
+                secureRoot is null)
             {
                 AddWarning(
                     repositoryWarnings,
                     repositoryRoot,
-                    repositoryMountError ?? "Unable to identify the repository filesystem mount.");
+                    repositoryOpenError ?? "Unable to securely open the audit repository root.");
                 AddRepositoryResult(repositoryRoot, [], repositoryWarnings, repositories, allWarnings);
                 completedRepositoryCount = FileTreeAnalyzer.SaturatingAdd(completedRepositoryCount, 1);
                 ReportRepositoryAuditCompleted(
@@ -150,15 +155,20 @@ public sealed class RepositoryAuditor
                 continue;
             }
 
-            var aggregate = await AuditDirectoryContentsAsync(
-                repositoryRoot,
-                repositoryRoot,
-                visiblePaths,
-                activeRules,
-                options,
-                repositoryMount,
-                repositoryWarnings,
-                cancellationToken).ConfigureAwait(false);
+            AuditAggregate aggregate;
+            using (secureRoot)
+            {
+                aggregate = await AuditDirectoryContentsAsync(
+                    repositoryRoot,
+                    secureRoot,
+                    visiblePathSet,
+                    activeRules,
+                    options,
+                    secureRoot.MountIdentity,
+                    repositoryWarnings,
+                    cancellationToken).ConfigureAwait(false);
+                if (!TryConfirmUnchanged(secureRoot, repositoryWarnings)) aggregate = AuditAggregate.Empty;
+            }
             var findings = aggregate.Findings
                 .Where(finding => finding.EstimatedBytes >= options.MinimumBytes)
                 .OrderByDescending(finding => finding.EstimatedBytes)
@@ -215,159 +225,177 @@ public sealed class RepositoryAuditor
 
     private async Task<AuditAggregate> AuditDirectoryContentsAsync(
         string repositoryRoot,
-        string directory,
-        IReadOnlyList<string> visiblePaths,
+        ISecureAuditEntry directory,
+        IReadOnlySet<string> visiblePaths,
         IReadOnlyList<ArtifactRule> activeRules,
         AuditOptions options,
         FileSystemMountIdentity repositoryMount,
         List<OperationWarning> warnings,
         CancellationToken cancellationToken)
     {
-        IReadOnlyList<string> paths;
-        try
+        if (!directory.TryEnumerate(out var secureEntries, out var enumerationError))
         {
-            paths = Directory.GetFileSystemEntries(directory)
-                .OrderBy(path => path, RepositoryPathPolicy.PathComparer)
-                .ToArray();
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-        {
-            AddWarning(warnings, directory, $"Unable to enumerate audit directory: {exception.Message}");
+            AddWarning(
+                warnings,
+                directory.AbsolutePath,
+                enumerationError ?? "Unable to securely enumerate the audit directory.");
             return AuditAggregate.Empty;
         }
 
-        var entries = new List<AuditEntry>(paths.Count);
-        foreach (var path in paths)
+        var orderedEntries = secureEntries
+            .OrderBy(entry => entry.Name, RepositoryPathPolicy.PathComparer)
+            .ToArray();
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (string.Equals(Path.GetFileName(path), ".git", StringComparison.OrdinalIgnoreCase)) continue;
-            var relativePath = RepositoryPathPolicy.NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, path));
-            if (RepositoryPathPolicy.IsExcluded(path, relativePath, options.Exclusions)) continue;
-            if (RepositoryPathPolicy.IsReservedRootQuarantine(relativePath))
+            var isRepositoryRoot = RepositoryPathPolicy.PathComparer.Equals(directory.AbsolutePath, repositoryRoot);
+            if (!isRepositoryRoot && orderedEntries.Any(entry =>
+                    string.Equals(entry.Name, ".git", StringComparison.OrdinalIgnoreCase)))
             {
-                AddWarning(
-                    warnings,
-                    path,
-                    "Skipped reserved RepoGlean quarantine; inspect or remove the stranded payload manually.");
-                continue;
+                AddWarning(warnings, directory.AbsolutePath, "Skipped nested repository boundary.");
+                return AuditAggregate.Empty;
             }
 
-            if (!entryInspector.TryGetEntryKind(path, out var entryKind, out var entryKindError))
+            var entries = new List<AuditEntry>(orderedEntries.Length);
+            foreach (var secureEntry in orderedEntries)
             {
-                AddWarning(warnings, path, entryKindError ?? "Unable to inspect audit entry type.");
-                continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.Equals(secureEntry.Name, ".git", StringComparison.OrdinalIgnoreCase)) continue;
+                var path = secureEntry.AbsolutePath;
+                var relativePath = RepositoryPathPolicy.NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, path));
+                if (RepositoryPathPolicy.IsExcluded(path, relativePath, options.Exclusions)) continue;
+                if (RepositoryPathPolicy.IsReservedRootQuarantine(relativePath))
+                {
+                    AddWarning(
+                        warnings,
+                        path,
+                        "Skipped reserved RepoGlean quarantine; inspect or remove the stranded payload manually.");
+                    continue;
+                }
+
+                // Git-visible entries are carved before link warnings. A tracked or otherwise visible
+                // symbolic link is ordinary repository content, not a partial audit failure.
+                if (visiblePaths.Contains(relativePath)) continue;
+                if (activeRules.Any(rule => rule.Matches(relativePath))) continue;
+
+                if (secureEntry.InspectionError is not null)
+                {
+                    AddWarning(warnings, path, secureEntry.InspectionError);
+                    continue;
+                }
+
+                if (secureEntry.Kind == FileSystemEntryKind.Link)
+                {
+                    AddWarning(warnings, path, "Skipped audit filesystem link, junction, or reparse point.");
+                    continue;
+                }
+
+                if (secureEntry.Kind == FileSystemEntryKind.Other)
+                {
+                    AddWarning(warnings, path, "Skipped non-regular audit filesystem entry.");
+                    continue;
+                }
+
+                if (secureEntry.MountIdentity != repositoryMount)
+                {
+                    AddWarning(warnings, path, "Skipped path on a different filesystem mount or volume.");
+                    continue;
+                }
+
+                entries.Add(new AuditEntry(secureEntry, relativePath));
             }
 
-            if (entryKind == FileSystemEntryKind.Link)
+            var matches = await GetIgnoreMatchesAsync(
+                repositoryRoot,
+                entries,
+                warnings,
+                cancellationToken).ConfigureAwait(false);
+            var aggregate = new AuditAggregate();
+            foreach (var entry in entries)
             {
-                AddWarning(warnings, path, "Skipped audit filesystem link, junction, or reparse point.");
-                continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!matches.TryGetValue(entry.RelativePath, out var match)) continue;
+                if (!TryRevalidateEntry(entry, repositoryMount, warnings, out var revalidated) ||
+                    revalidated is null)
+                {
+                    continue;
+                }
+
+                using (revalidated)
+                {
+                    checkpoint?.Invoke(
+                        revalidated.Kind == FileSystemEntryKind.Directory
+                            ? SecureAuditCheckpoint.BeforeDirectoryEnumeration
+                            : SecureAuditCheckpoint.BeforeFileMeasurement,
+                        revalidated.AbsolutePath);
+                    var child = revalidated.Kind == FileSystemEntryKind.Directory
+                        ? await AuditDirectoryAsync(
+                            repositoryRoot,
+                            entry.RelativePath,
+                            revalidated,
+                            match,
+                            visiblePaths,
+                            activeRules,
+                            options,
+                            repositoryMount,
+                            warnings,
+                            cancellationToken).ConfigureAwait(false)
+                        : AuditFile(repositoryRoot, entry.RelativePath, revalidated, match, warnings);
+                    aggregate.Absorb(child);
+                }
             }
 
-            if (entryKind == FileSystemEntryKind.Other)
-            {
-                AddWarning(warnings, path, "Skipped non-regular audit filesystem entry.");
-                continue;
-            }
-
-            var isDirectory = entryKind == FileSystemEntryKind.Directory;
-            if (isDirectory && RepositoryPathPolicy.IsRepositoryBoundary(path))
-            {
-                AddWarning(warnings, path, "Skipped nested repository boundary.");
-                continue;
-            }
-
-            if (!volumeBoundary.TryGetMountIdentity(path, out var mount, out var mountError) || mount is null)
-            {
-                AddWarning(warnings, path, mountError ?? "Unable to identify the audit path filesystem mount.");
-                continue;
-            }
-
-            if (mount != repositoryMount)
-            {
-                AddWarning(warnings, path, "Skipped path on a different filesystem mount or volume.");
-                continue;
-            }
-
-            if (activeRules.Any(rule => rule.Matches(relativePath))) continue;
-            if (!isDirectory && RepositoryPathPolicy.ContainsVisibleContent(relativePath, visiblePaths)) continue;
-            entries.Add(new AuditEntry(path, relativePath, isDirectory));
+            return aggregate;
         }
-
-        var matches = await GetIgnoreMatchesAsync(
-            repositoryRoot,
-            entries,
-            warnings,
-            cancellationToken).ConfigureAwait(false);
-        var aggregate = new AuditAggregate();
-        foreach (var entry in entries)
+        finally
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!matches.TryGetValue(entry.RelativePath, out var match)) continue;
-            if (!TryRevalidateEntry(entry, repositoryMount, warnings)) continue;
-            var child = entry.IsDirectory
-                ? await AuditDirectoryAsync(
-                    repositoryRoot,
-                    entry,
-                    match,
-                    visiblePaths,
-                    activeRules,
-                    options,
-                    repositoryMount,
-                    warnings,
-                    cancellationToken).ConfigureAwait(false)
-                : AuditFile(repositoryRoot, entry, match, warnings);
-            aggregate.Absorb(child);
+            foreach (var secureEntry in secureEntries) secureEntry.Dispose();
         }
-
-        return aggregate;
     }
 
     private bool TryRevalidateEntry(
         AuditEntry entry,
         FileSystemMountIdentity repositoryMount,
-        List<OperationWarning> warnings)
+        List<OperationWarning> warnings,
+        out ISecureAuditEntry? revalidated)
     {
-        if (!entryInspector.TryGetEntryKind(entry.AbsolutePath, out var entryKind, out var entryKindError))
+        if (!entry.SecureEntry.TryReopen(out revalidated, out var reopenError) || revalidated is null)
         {
-            AddWarning(warnings, entry.AbsolutePath, entryKindError ?? "Unable to revalidate audit entry type.");
+            AddWarning(
+                warnings,
+                entry.SecureEntry.AbsolutePath,
+                reopenError ?? "Unable to securely revalidate the audit entry.");
             return false;
         }
 
-        if (entryKind == FileSystemEntryKind.Link)
+        if (revalidated.Kind == FileSystemEntryKind.Link)
         {
-            AddWarning(warnings, entry.AbsolutePath, "Skipped audit filesystem link, junction, or reparse point.");
+            AddWarning(warnings, entry.SecureEntry.AbsolutePath, "Skipped audit filesystem link, junction, or reparse point.");
+            revalidated.Dispose();
+            revalidated = null;
             return false;
         }
 
-        if (entryKind == FileSystemEntryKind.Other)
+        if (revalidated.Kind == FileSystemEntryKind.Other)
         {
-            AddWarning(warnings, entry.AbsolutePath, "Skipped non-regular audit filesystem entry.");
+            AddWarning(warnings, entry.SecureEntry.AbsolutePath, "Skipped non-regular audit filesystem entry.");
+            revalidated.Dispose();
+            revalidated = null;
             return false;
         }
 
-        var isDirectory = entryKind == FileSystemEntryKind.Directory;
-        if (isDirectory != entry.IsDirectory)
+        if (revalidated.Identity != entry.SecureEntry.Identity)
         {
-            AddWarning(warnings, entry.AbsolutePath, "Skipped audit entry that changed type during classification.");
+            AddWarning(warnings, entry.SecureEntry.AbsolutePath, "Skipped audit entry that changed identity or type during classification.");
+            revalidated.Dispose();
+            revalidated = null;
             return false;
         }
 
-        if (isDirectory && RepositoryPathPolicy.IsRepositoryBoundary(entry.AbsolutePath))
+        if (revalidated.MountIdentity != repositoryMount)
         {
-            AddWarning(warnings, entry.AbsolutePath, "Skipped nested repository boundary.");
-            return false;
-        }
-
-        if (!volumeBoundary.TryGetMountIdentity(entry.AbsolutePath, out var mount, out var mountError) || mount is null)
-        {
-            AddWarning(warnings, entry.AbsolutePath, mountError ?? "Unable to revalidate the audit path filesystem mount.");
-            return false;
-        }
-
-        if (mount != repositoryMount)
-        {
-            AddWarning(warnings, entry.AbsolutePath, "Skipped path on a different filesystem mount or volume.");
+            AddWarning(warnings, entry.SecureEntry.AbsolutePath, "Skipped path on a different filesystem mount or volume.");
+            revalidated.Dispose();
+            revalidated = null;
             return false;
         }
 
@@ -376,9 +404,10 @@ public sealed class RepositoryAuditor
 
     private async Task<AuditAggregate> AuditDirectoryAsync(
         string repositoryRoot,
-        AuditEntry entry,
+        string relativePath,
+        ISecureAuditEntry entry,
         GitIgnoreMatch match,
-        IReadOnlyList<string> visiblePaths,
+        IReadOnlySet<string> visiblePaths,
         IReadOnlyList<ArtifactRule> activeRules,
         AuditOptions options,
         FileSystemMountIdentity repositoryMount,
@@ -387,22 +416,23 @@ public sealed class RepositoryAuditor
     {
         var aggregate = await AuditDirectoryContentsAsync(
             repositoryRoot,
-            entry.AbsolutePath,
+            entry,
             visiblePaths,
             activeRules,
             options,
             repositoryMount,
             warnings,
             cancellationToken).ConfigureAwait(false);
+        if (!TryConfirmUnchanged(entry, warnings)) return AuditAggregate.Empty;
         if (aggregate.FileCount == 0) return AuditAggregate.Empty;
 
-        aggregate.ObserveTimestamp(timestampProvider, entry.AbsolutePath);
+        aggregate.ObserveTimestamp(entry.LastWriteTimeUtc);
         if (!match.IsIgnored) return aggregate;
 
         aggregate.ReplaceFindings(new AuditFinding(
             repositoryRoot,
             Path.GetFullPath(entry.AbsolutePath),
-            entry.RelativePath,
+            relativePath,
             aggregate.FileCount,
             aggregate.EstimatedBytes,
             aggregate.TimestampUnavailable ? null : aggregate.NewestWriteTimeUtc,
@@ -412,38 +442,50 @@ public sealed class RepositoryAuditor
 
     private AuditAggregate AuditFile(
         string repositoryRoot,
-        AuditEntry entry,
+        string relativePath,
+        ISecureAuditEntry entry,
         GitIgnoreMatch match,
         List<OperationWarning> warnings)
     {
         if (!match.IsIgnored) return AuditAggregate.Empty;
-
-        long length;
-        try
-        {
-            length = new FileInfo(entry.AbsolutePath).Length;
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-        {
-            AddWarning(warnings, entry.AbsolutePath, $"Unable to read audit file length: {exception.Message}");
-            return AuditAggregate.Empty;
-        }
+        var length = entry.Length;
+        if (!TryConfirmUnchanged(entry, warnings)) return AuditAggregate.Empty;
 
         var aggregate = new AuditAggregate
         {
             FileCount = 1,
             EstimatedBytes = length,
         };
-        aggregate.ObserveTimestamp(timestampProvider, entry.AbsolutePath);
+        aggregate.ObserveTimestamp(entry.LastWriteTimeUtc);
         aggregate.ReplaceFindings(new AuditFinding(
             repositoryRoot,
             Path.GetFullPath(entry.AbsolutePath),
-            entry.RelativePath,
+            relativePath,
             1,
             length,
             aggregate.TimestampUnavailable ? null : aggregate.NewestWriteTimeUtc,
             match));
         return aggregate;
+    }
+
+    private bool TryConfirmUnchanged(ISecureAuditEntry entry, List<OperationWarning> warnings)
+    {
+        if (!entry.TryReopen(out var current, out var reopenError) || current is null)
+        {
+            AddWarning(
+                warnings,
+                entry.AbsolutePath,
+                reopenError ?? "Unable to securely confirm the audit entry after inspection.");
+            return false;
+        }
+
+        using (current)
+        {
+            if (current.Identity == entry.Identity && current.MountIdentity == entry.MountIdentity) return true;
+        }
+
+        AddWarning(warnings, entry.AbsolutePath, "Skipped audit entry that changed identity or type during inspection.");
+        return false;
     }
 
     private async Task<Dictionary<string, GitIgnoreMatch>> GetIgnoreMatchesAsync(
@@ -500,7 +542,7 @@ public sealed class RepositoryAuditor
         }
         catch (GitCommandException exception)
         {
-            AddWarning(warnings, batch[0].AbsolutePath, exception.Message);
+            AddWarning(warnings, batch[0].SecureEntry.AbsolutePath, exception.Message);
         }
     }
 
@@ -590,7 +632,7 @@ public sealed class RepositoryAuditor
         and not StackOverflowException
         and not AccessViolationException;
 
-    private sealed record AuditEntry(string AbsolutePath, string RelativePath, bool IsDirectory);
+    private sealed record AuditEntry(ISecureAuditEntry SecureEntry, string RelativePath);
 
     private sealed class AuditAggregate
     {
@@ -606,17 +648,17 @@ public sealed class RepositoryAuditor
 
         internal List<AuditFinding> Findings { get; } = [];
 
-        internal void ObserveTimestamp(IFileTimestampProvider provider, string path)
+        internal void ObserveTimestamp(DateTimeOffset? observed)
         {
-            if (!provider.TryGetLastWriteTimeUtc(path, out var observed))
+            if (observed is null)
             {
                 TimestampUnavailable = true;
                 return;
             }
 
-            if (NewestWriteTimeUtc is null || observed > NewestWriteTimeUtc.Value)
+            if (NewestWriteTimeUtc is null || observed.Value > NewestWriteTimeUtc.Value)
             {
-                NewestWriteTimeUtc = observed;
+                NewestWriteTimeUtc = observed.Value;
             }
         }
 

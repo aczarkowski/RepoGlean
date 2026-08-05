@@ -10,6 +10,7 @@ internal enum ProgressMode
 internal enum ProgressOperation
 {
     Scan,
+    Audit,
     Plan,
     Clean,
 }
@@ -48,6 +49,8 @@ internal sealed record OperationProgressEvent(
     long RepositoryCount = 0,
     long CurrentCandidateCount = 0,
     long CandidateCount = 0,
+    long CurrentFindingCount = 0,
+    long FindingCount = 0,
     long CurrentEstimatedBytes = 0,
     long EstimatedBytes = 0,
     long DeletedCount = 0,

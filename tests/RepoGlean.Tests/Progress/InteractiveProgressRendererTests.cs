@@ -103,6 +103,29 @@ public sealed class InteractiveProgressRendererTests
     }
 
     [Fact]
+    public async Task Report_renders_audit_stage_with_findings_instead_of_candidates()
+    {
+        using var writer = new LockedStringWriter();
+        var ticker = new ManualProgressTicker();
+        await using var renderer = new InteractiveProgressRenderer(writer, () => 120, ticker);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanStarted,
+            ProgressOperation.Audit,
+            Path: "/work/my-api",
+            Current: 1,
+            Total: 2,
+            FindingCount: 3,
+            EstimatedBytes: 18));
+
+        Assert.Contains(
+            "Auditing repositories 1/2 • 3 findings • 18 B estimated",
+            writer.Snapshot,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("candidate", writer.Snapshot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Report_truncates_optional_path_with_ellipsis_to_exact_terminal_width()
     {
         const string fixedContent = "⠋ Scanning repositories 1/2 • 3 candidates • 4 KiB estimated";

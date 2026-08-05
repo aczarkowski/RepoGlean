@@ -53,7 +53,13 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
     {
         ProgressEventKind.DiscoveryStarted => $"Discovering repositories under {ProgressText.FormatRoots(progressEvent.Roots)}...",
         ProgressEventKind.DiscoveryCompleted => $"Found {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}.",
+        ProgressEventKind.RepositoryScanStarted when progressEvent.Operation == ProgressOperation.Audit =>
+            $"Auditing [{progressEvent.Current}/{progressEvent.Total}] {DisplayValue(progressEvent.Path)}...",
         ProgressEventKind.RepositoryScanStarted => $"Scanning [{progressEvent.Current}/{progressEvent.Total}] {DisplayValue(progressEvent.Path)}...",
+        ProgressEventKind.RepositoryScanCompleted when
+            progressEvent.Operation == ProgressOperation.Audit &&
+            progressEvent.CurrentFindingCount > 0 =>
+            $"Found {progressEvent.CurrentFindingCount} {ProgressText.Plural(progressEvent.CurrentFindingCount, "finding", "findings")} in {ProgressText.DisplayPath(progressEvent.Path)} ({ProgressText.FormatBytes(progressEvent.CurrentEstimatedBytes)}).",
         ProgressEventKind.RepositoryScanCompleted when progressEvent.CurrentCandidateCount > 0 =>
             $"Found {progressEvent.CurrentCandidateCount} {ProgressText.Plural(progressEvent.CurrentCandidateCount, "candidate", "candidates")} in {ProgressText.DisplayPath(progressEvent.Path)} ({ProgressText.FormatBytes(progressEvent.CurrentEstimatedBytes)}).",
         ProgressEventKind.CandidateStarted => $"Validating [{progressEvent.Current}/{progressEvent.Total}] {DisplayValue(progressEvent.Path)}...",
@@ -85,6 +91,7 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
     private static string FormatCompleted(OperationProgressEvent progressEvent) => progressEvent.Operation switch
     {
         ProgressOperation.Scan => $"Scan complete: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
+        ProgressOperation.Audit => $"Audit complete: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.FindingCount} {ProgressText.Plural(progressEvent.FindingCount, "finding", "findings")}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
         ProgressOperation.Plan => $"Plan complete: {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")} selected, {ProgressText.FormatBytes(progressEvent.EstimatedBytes)} planned, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
         _ => $"Cleanup complete: {CleanupAggregate(progressEvent)}.",
     };
@@ -92,6 +99,7 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
     private static string FormatInterrupted(OperationProgressEvent progressEvent) => progressEvent.Operation switch
     {
         ProgressOperation.Scan => $"Scan interrupted: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
+        ProgressOperation.Audit => $"Audit interrupted: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.FindingCount} {ProgressText.Plural(progressEvent.FindingCount, "finding", "findings")}, {ProgressText.FormatBytes(progressEvent.EstimatedBytes)}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
         ProgressOperation.Plan => $"Plan interrupted: {progressEvent.RepositoryCount} {ProgressText.Plural(progressEvent.RepositoryCount, "repository", "repositories")}, {progressEvent.CandidateCount} {ProgressText.Plural(progressEvent.CandidateCount, "candidate", "candidates")}, {ProgressText.FormatBytes(progressEvent.EstimatedBytes)}, {progressEvent.WarningCount} {ProgressText.Plural(progressEvent.WarningCount, "warning", "warnings")}.",
         _ => $"Cleanup interrupted: {CleanupAggregate(progressEvent)}.",
     };
@@ -101,6 +109,7 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
         var operation = progressEvent.Operation switch
         {
             ProgressOperation.Scan => "Scan",
+            ProgressOperation.Audit => "Audit",
             ProgressOperation.Plan => "Plan",
             _ => "Cleanup",
         };

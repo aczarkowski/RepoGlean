@@ -77,6 +77,30 @@ public sealed class ProgressSnapshotTests
     }
 
     [Fact]
+    public void Apply_formats_repository_audit_with_finding_vocabulary()
+    {
+        var snapshot = new ProgressSnapshot()
+            .Apply(new OperationProgressEvent(
+                ProgressEventKind.RepositoryScanStarted,
+                ProgressOperation.Audit,
+                Path: "/work/my-api",
+                Current: 1,
+                Total: 2))
+            .Apply(new OperationProgressEvent(
+                ProgressEventKind.RepositoryScanCompleted,
+                ProgressOperation.Audit,
+                Path: "/work/my-api",
+                Current: 1,
+                Total: 2,
+                FindingCount: 3,
+                EstimatedBytes: 18));
+
+        Assert.Contains("Auditing repositories 1/2", snapshot.Format(), StringComparison.Ordinal);
+        Assert.Contains("3 findings", snapshot.Format(), StringComparison.Ordinal);
+        Assert.DoesNotContain("candidate", snapshot.Format(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Apply_formats_permanent_cleanup_and_advances_bytes_only_for_deleted_outcomes()
     {
         var snapshot = new ProgressSnapshot()

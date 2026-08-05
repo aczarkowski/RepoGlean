@@ -118,6 +118,53 @@ public sealed class VerboseProgressRendererTests
     }
 
     [Fact]
+    public void Report_formats_audit_milestones_completion_interruption_and_failure()
+    {
+        using var writer = new StringWriter();
+        var renderer = new VerboseProgressRenderer(writer);
+
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanStarted,
+            ProgressOperation.Audit,
+            Path: "/work/example",
+            Current: 1,
+            Total: 2));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanCompleted,
+            ProgressOperation.Audit,
+            Path: "/work/example",
+            Current: 1,
+            Total: 2,
+            CurrentFindingCount: 3,
+            CurrentEstimatedBytes: 18L * 1024 * 1024 * 1024));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Completed,
+            ProgressOperation.Audit,
+            RepositoryCount: 2,
+            FindingCount: 3,
+            WarningCount: 1));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Interrupted,
+            ProgressOperation.Audit,
+            RepositoryCount: 1,
+            FindingCount: 2,
+            EstimatedBytes: 18L * 1024 * 1024 * 1024,
+            WarningCount: 0));
+        renderer.Report(new OperationProgressEvent(
+            ProgressEventKind.Failed,
+            ProgressOperation.Audit,
+            Message: "Git was unavailable."));
+
+        AssertContainsInOrder(
+            writer.ToString(),
+            "Auditing [1/2] /work/example...",
+            "Found 3 findings in example (18 GiB estimated).",
+            "Audit complete: 2 repositories, 3 findings, 1 warning.",
+            "Audit interrupted: 1 repository, 2 findings, 18 GiB estimated, 0 warnings.",
+            "Audit failed: Git was unavailable.");
+    }
+
+    [Fact]
     public void Report_removes_control_characters_from_event_supplied_text()
     {
         using var writer = new StringWriter { NewLine = "\r\n" };

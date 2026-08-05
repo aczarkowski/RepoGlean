@@ -7,6 +7,7 @@ internal sealed class OperationProgressTracker : IOperationProgress
     private int completedRepositoryCount;
     private int repositoryTotal;
     private long candidateCount;
+    private long findingCount;
     private long estimatedBytes;
     private long warningCount;
 
@@ -18,7 +19,7 @@ internal sealed class OperationProgressTracker : IOperationProgress
     public void Report(OperationProgressEvent progressEvent)
     {
         ArgumentNullException.ThrowIfNull(progressEvent);
-        if (progressEvent.Operation is ProgressOperation.Scan or ProgressOperation.Plan)
+        if (progressEvent.Operation is ProgressOperation.Scan or ProgressOperation.Audit or ProgressOperation.Plan)
         {
             lock (sync)
             {
@@ -41,6 +42,7 @@ internal sealed class OperationProgressTracker : IOperationProgress
                 Total: repositoryTotal,
                 RepositoryCount: completedRepositoryCount,
                 CandidateCount: candidateCount,
+                FindingCount: findingCount,
                 EstimatedBytes: estimatedBytes,
                 WarningCount: warningCount);
         }
@@ -60,6 +62,7 @@ internal sealed class OperationProgressTracker : IOperationProgress
                 completedRepositoryCount = 0;
                 repositoryTotal = 0;
                 candidateCount = 0;
+                findingCount = 0;
                 estimatedBytes = 0;
                 warningCount = 0;
                 break;
@@ -69,9 +72,12 @@ internal sealed class OperationProgressTracker : IOperationProgress
             case ProgressEventKind.RepositoryScanCompleted:
                 completedRepositoryCount = Math.Max(
                     completedRepositoryCount,
-                    progressEvent.Current);
+                    progressEvent.Operation == ProgressOperation.Audit
+                        ? (int)Math.Min(progressEvent.RepositoryCount, int.MaxValue)
+                        : progressEvent.Current);
                 repositoryTotal = Math.Max(repositoryTotal, progressEvent.Total);
                 candidateCount = Math.Max(candidateCount, progressEvent.CandidateCount);
+                findingCount = Math.Max(findingCount, progressEvent.FindingCount);
                 estimatedBytes = Math.Max(estimatedBytes, progressEvent.EstimatedBytes);
                 break;
             case ProgressEventKind.Warning:

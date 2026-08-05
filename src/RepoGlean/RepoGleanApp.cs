@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RepoGlean.Auditing;
 using RepoGlean.Cli;
 using RepoGlean.Cleaning;
 using RepoGlean.Configuration;
@@ -105,9 +106,6 @@ public static class RepoGleanApp
                 case CommandKind.Version:
                     stdout.WriteLine($"repoglean {GetVersion()}");
                     return 0;
-                case CommandKind.Audit:
-                    await stderr.WriteLineAsync("Error: audit is not implemented.").ConfigureAwait(false);
-                    return 2;
                 case CommandKind.ConfigPath:
                     stdout.WriteLine(ResolveConfigPath(options.ConfigPath));
                     return 0;
@@ -144,6 +142,8 @@ public static class RepoGleanApp
                     return 0;
                 case CommandKind.Scan:
                     return await RunScanAsync(options, config, runtime, stdout, stderr, cancellationToken).ConfigureAwait(false);
+                case CommandKind.Audit:
+                    return await RunAuditAsync(options, config, runtime, stdout, stderr, cancellationToken).ConfigureAwait(false);
                 case CommandKind.Plan:
                     return await RunPlanAsync(options, config, runtime, stdout, stderr, cancellationToken).ConfigureAwait(false);
                 case CommandKind.Clean:
@@ -157,7 +157,17 @@ public static class RepoGleanApp
         {
             if (options.OutputFormat == OutputFormat.Json)
             {
-                await JsonReportWriter.WriteAsync(ReportDocument.Interrupted(OperationName(options.Command)), stdout, CancellationToken.None).ConfigureAwait(false);
+                if (options.Command == CommandKind.Audit)
+                {
+                    await JsonReportWriter.WriteAsync(
+                        AuditReportDocument.Interrupted(),
+                        stdout,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    await JsonReportWriter.WriteAsync(ReportDocument.Interrupted(OperationName(options.Command)), stdout, CancellationToken.None).ConfigureAwait(false);
+                }
             }
             else
             {
@@ -170,7 +180,17 @@ public static class RepoGleanApp
         {
             if (options.OutputFormat == OutputFormat.Json)
             {
-                await JsonReportWriter.WriteAsync(ReportDocument.Failure(OperationName(options.Command), exception.Message), stdout, CancellationToken.None).ConfigureAwait(false);
+                if (options.Command == CommandKind.Audit)
+                {
+                    await JsonReportWriter.WriteAsync(
+                        AuditReportDocument.Failure(exception.Message),
+                        stdout,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    await JsonReportWriter.WriteAsync(ReportDocument.Failure(OperationName(options.Command), exception.Message), stdout, CancellationToken.None).ConfigureAwait(false);
+                }
             }
             else
             {
@@ -604,6 +624,110 @@ public static class RepoGleanApp
                 new OperationProgressEvent(
                     ProgressEventKind.Failed,
                     ProgressOperation.Scan,
+                    Message: exception.Message));
+            PauseProgress(progress);
+            throw;
+        }
+    }
+
+    private static async Task<int> RunAuditAsync(
+        CliOptions options,
+        RepoGleanConfig config,
+        AppRuntime runtime,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        await using var progress = new OperationProgressTracker(
+            ProgressReporterFactory.Create(
+                runtime.IsErrorInteractive,
+                options.OutputFormat,
+                options.Quiet,
+                options.Verbose,
+                options.NoProgress,
+                stderr,
+                runtime.ErrorWidthProvider ?? (() => null)));
+        try
+        {
+            var roots = ResolveRoots(options.Roots, config.Roots, runtime.HomeDirectory);
+            var exclusions = config.Excludes.Concat(options.Exclusions).ToArray();
+            var minimumBytes = options.MinimumBytes ?? AuditOptions.DefaultMinimumBytes;
+            var git = new GitClient(runtime.GitExecutable);
+            await git.GetVersionAsync(cancellationToken).ConfigureAwait(false);
+
+            var discoveryService = runtime.DriveRootProvider is null
+                ? new RepositoryDiscovery(git, progress, ProgressOperation.Audit)
+                : new RepositoryDiscovery(git, runtime.DriveRootProvider, progress, ProgressOperation.Audit);
+            var discovery = await discoveryService
+                .DiscoverAsync(roots, exclusions, options.AllDrives, cancellationToken)
+                .ConfigureAwait(false);
+            var result = await new RepositoryAuditor(git, progress)
+                .AuditAsync(
+                    discovery.Repositories,
+                    RuleCatalog.Create(config),
+                    new AuditOptions(options.Repositories, exclusions, minimumBytes),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (discovery.Warnings.Count > 0)
+            {
+                result = result with
+                {
+                    Warnings = Array.AsReadOnly(
+                        discovery.Warnings.Concat(result.Warnings).ToArray()),
+                };
+            }
+
+            var report = AuditReportDocument.FromAudit(
+                discovery.EffectiveRoots ?? roots,
+                result);
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Completed,
+                    ProgressOperation.Audit,
+                    RepositoryCount: report.Totals.RepositoryCount,
+                    FindingCount: report.Totals.FindingCount,
+                    EstimatedBytes: report.Totals.EstimatedBytes,
+                    WarningCount: report.Warnings.Count));
+            PauseProgress(progress);
+            if (options.OutputFormat == OutputFormat.Json)
+            {
+                await JsonReportWriter.WriteAsync(
+                    report,
+                    stdout,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                HumanReportWriter.WriteAudit(
+                    report,
+                    minimumBytes,
+                    stdout,
+                    new HumanReportOptions(
+                        Details: false,
+                        Quiet: options.Quiet,
+                        Verbose: options.Verbose,
+                        UseColor: runtime.IsOutputInteractive && !options.NoColor));
+            }
+
+            return report.Warnings.Count == 0 ? 0 : 3;
+        }
+        catch (OperationCanceledException)
+        {
+            ReportProgress(
+                progress,
+                progress.CreateReadOnlyInterruptedEvent(ProgressOperation.Audit));
+            PauseProgress(progress);
+            throw;
+        }
+        catch (Exception exception) when (IsOperationalException(exception))
+        {
+            ReportProgress(
+                progress,
+                new OperationProgressEvent(
+                    ProgressEventKind.Failed,
+                    ProgressOperation.Audit,
                     Message: exception.Message));
             PauseProgress(progress);
             throw;

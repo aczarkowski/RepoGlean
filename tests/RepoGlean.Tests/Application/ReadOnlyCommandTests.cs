@@ -22,16 +22,6 @@ public sealed class ReadOnlyCommandTests
     }
 
     [Fact]
-    public async Task Audit_reports_the_temporary_unsupported_command_error()
-    {
-        var result = await RunAsync(["audit"]);
-
-        Assert.Equal(2, result.ExitCode);
-        Assert.Equal(string.Empty, result.Stdout);
-        Assert.Equal($"Error: audit is not implemented.{Environment.NewLine}", result.Stderr);
-    }
-
-    [Fact]
     public async Task Scan_json_uses_cli_roots_over_config_and_keeps_stdout_machine_clean()
     {
         using var temporary = new TemporaryDirectory();

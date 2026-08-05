@@ -13,6 +13,44 @@ public sealed class OperationProgressTrackerTests
     public Task Plan_interruption_uses_completed_scan_totals_without_regressing_to_discovery_or_start_values() =>
         AssertReadOnlyInterruptionAsync(ProgressOperation.Plan);
 
+    [Fact]
+    public async Task Audit_interruption_uses_completed_finding_totals()
+    {
+        var inner = new RecordingProgress();
+        await using var tracker = new OperationProgressTracker(inner);
+        tracker.Report(new OperationProgressEvent(
+            ProgressEventKind.DiscoveryStarted,
+            ProgressOperation.Audit,
+            Roots: ["/work"]));
+        tracker.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanStarted,
+            ProgressOperation.Audit,
+            Path: "/work/first",
+            Current: 1,
+            Total: 2));
+        tracker.Report(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanCompleted,
+            ProgressOperation.Audit,
+            Path: "/work/first",
+            Current: 1,
+            Total: 2,
+            RepositoryCount: 1,
+            FindingCount: 2,
+            EstimatedBytes: 18));
+        tracker.Report(new OperationProgressEvent(
+            ProgressEventKind.Warning,
+            ProgressOperation.Audit,
+            Path: "/work/second",
+            Message: "Second repository interrupted."));
+
+        var interrupted = tracker.CreateReadOnlyInterruptedEvent(ProgressOperation.Audit);
+
+        Assert.Equal(1, interrupted.RepositoryCount);
+        Assert.Equal(2, interrupted.FindingCount);
+        Assert.Equal(18, interrupted.EstimatedBytes);
+        Assert.Equal(1, interrupted.WarningCount);
+    }
+
     private static async Task AssertReadOnlyInterruptionAsync(
         ProgressOperation operation)
     {

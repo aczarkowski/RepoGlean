@@ -18,6 +18,11 @@ public sealed class RepositoryAuditor
     {
     }
 
+    internal RepositoryAuditor(GitClient git, IOperationProgress progress)
+        : this(git, new FileSystemIdentityProvider(), new FileTimestampProvider(), progress)
+    {
+    }
+
     internal RepositoryAuditor(
         GitClient git,
         IVolumeBoundary volumeBoundary,
@@ -60,16 +65,41 @@ public sealed class RepositoryAuditor
             .ToArray();
         var repositories = new List<RepositoryAuditResult>();
         var allWarnings = new List<OperationWarning>();
+        long completedRepositoryCount = 0;
+        long cumulativeFindingCount = 0;
+        long cumulativeEstimatedBytes = 0;
 
-        foreach (var repositoryRoot in selectedRepositoryRoots)
+        for (var index = 0; index < selectedRepositoryRoots.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var repositoryRoot = selectedRepositoryRoots[index];
+            var current = index + 1;
+            ReportProgress(new OperationProgressEvent(
+                ProgressEventKind.RepositoryScanStarted,
+                ProgressOperation.Audit,
+                Path: repositoryRoot,
+                Current: current,
+                Total: selectedRepositoryRoots.Length,
+                RepositoryCount: completedRepositoryCount,
+                FindingCount: cumulativeFindingCount,
+                EstimatedBytes: cumulativeEstimatedBytes,
+                WarningCount: allWarnings.Count));
             IReadOnlyList<string> visiblePaths;
             try
             {
                 if (!await git.IsWorkingTreeAsync(repositoryRoot, cancellationToken).ConfigureAwait(false))
                 {
-                    allWarnings.Add(new OperationWarning(repositoryRoot, "Path is not a Git working tree."));
+                    AddWarning(allWarnings, repositoryRoot, "Path is not a Git working tree.");
+                    ReportRepositoryAuditCompleted(
+                        repositoryRoot,
+                        current,
+                        selectedRepositoryRoots.Length,
+                        completedRepositoryCount,
+                        0,
+                        0,
+                        cumulativeFindingCount,
+                        cumulativeEstimatedBytes,
+                        allWarnings.Count);
                     continue;
                 }
 
@@ -77,7 +107,17 @@ public sealed class RepositoryAuditor
             }
             catch (GitCommandException exception)
             {
-                allWarnings.Add(new OperationWarning(repositoryRoot, exception.Message));
+                AddWarning(allWarnings, repositoryRoot, exception.Message);
+                ReportRepositoryAuditCompleted(
+                    repositoryRoot,
+                    current,
+                    selectedRepositoryRoots.Length,
+                    completedRepositoryCount,
+                    0,
+                    0,
+                    cumulativeFindingCount,
+                    cumulativeEstimatedBytes,
+                    allWarnings.Count);
                 continue;
             }
 
@@ -96,6 +136,17 @@ public sealed class RepositoryAuditor
                     repositoryRoot,
                     repositoryMountError ?? "Unable to identify the repository filesystem mount.");
                 AddRepositoryResult(repositoryRoot, [], repositoryWarnings, repositories, allWarnings);
+                completedRepositoryCount = FileTreeAnalyzer.SaturatingAdd(completedRepositoryCount, 1);
+                ReportRepositoryAuditCompleted(
+                    repositoryRoot,
+                    current,
+                    selectedRepositoryRoots.Length,
+                    completedRepositoryCount,
+                    0,
+                    0,
+                    cumulativeFindingCount,
+                    cumulativeEstimatedBytes,
+                    allWarnings.Count);
                 continue;
             }
 
@@ -114,6 +165,29 @@ public sealed class RepositoryAuditor
                 .ThenBy(finding => finding.RelativePath, StringComparer.Ordinal)
                 .ToArray();
             AddRepositoryResult(repositoryRoot, findings, repositoryWarnings, repositories, allWarnings);
+            long currentEstimatedBytes = 0;
+            foreach (var finding in findings)
+            {
+                currentEstimatedBytes = FileTreeAnalyzer.SaturatingAdd(
+                    currentEstimatedBytes,
+                    finding.EstimatedBytes);
+            }
+
+            completedRepositoryCount = FileTreeAnalyzer.SaturatingAdd(completedRepositoryCount, 1);
+            cumulativeFindingCount = FileTreeAnalyzer.SaturatingAdd(cumulativeFindingCount, findings.LongLength);
+            cumulativeEstimatedBytes = FileTreeAnalyzer.SaturatingAdd(
+                cumulativeEstimatedBytes,
+                currentEstimatedBytes);
+            ReportRepositoryAuditCompleted(
+                repositoryRoot,
+                current,
+                selectedRepositoryRoots.Length,
+                completedRepositoryCount,
+                findings.LongLength,
+                currentEstimatedBytes,
+                cumulativeFindingCount,
+                cumulativeEstimatedBytes,
+                allWarnings.Count);
         }
 
         repositories.Sort((left, right) =>
@@ -467,8 +541,54 @@ public sealed class RepositoryAuditor
         allWarnings.AddRange(repositoryWarnings);
     }
 
-    private static void AddWarning(List<OperationWarning> warnings, string path, string message) =>
+    private void AddWarning(List<OperationWarning> warnings, string path, string message)
+    {
         warnings.Add(new OperationWarning(path, message));
+        ReportProgress(new OperationProgressEvent(
+            ProgressEventKind.Warning,
+            ProgressOperation.Audit,
+            Path: path,
+            Message: message));
+    }
+
+    private void ReportRepositoryAuditCompleted(
+        string repositoryRoot,
+        int current,
+        int total,
+        long repositoryCount,
+        long currentFindingCount,
+        long currentEstimatedBytes,
+        long findingCount,
+        long estimatedBytes,
+        long warningCount) =>
+        ReportProgress(new OperationProgressEvent(
+            ProgressEventKind.RepositoryScanCompleted,
+            ProgressOperation.Audit,
+            Path: repositoryRoot,
+            Current: current,
+            Total: total,
+            RepositoryCount: repositoryCount,
+            CurrentFindingCount: currentFindingCount,
+            FindingCount: findingCount,
+            CurrentEstimatedBytes: currentEstimatedBytes,
+            EstimatedBytes: estimatedBytes,
+            WarningCount: warningCount));
+
+    private void ReportProgress(OperationProgressEvent progressEvent)
+    {
+        try
+        {
+            progress.Report(progressEvent);
+        }
+        catch (Exception exception) when (IsRecoverableProgressException(exception))
+        {
+        }
+    }
+
+    private static bool IsRecoverableProgressException(Exception exception) =>
+        exception is not OutOfMemoryException
+        and not StackOverflowException
+        and not AccessViolationException;
 
     private sealed record AuditEntry(string AbsolutePath, string RelativePath, bool IsDirectory);
 

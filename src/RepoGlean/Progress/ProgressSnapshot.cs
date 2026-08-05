@@ -2,11 +2,13 @@ namespace RepoGlean.Progress;
 
 internal sealed record ProgressSnapshot(
     ProgressEventKind? Phase = null,
+    ProgressOperation Operation = ProgressOperation.Scan,
     string? OptionalPath = null,
     int Current = 0,
     int Total = 0,
     long RepositoryCount = 0,
     long CandidateCount = 0,
+    long FindingCount = 0,
     long DeletedCount = 0,
     long ValidatedCount = 0,
     long SkippedCount = 0,
@@ -29,6 +31,7 @@ internal sealed record ProgressSnapshot(
             ProgressEventKind.DiscoveryStarted => this with
             {
                 Phase = progressEvent.Kind,
+                Operation = progressEvent.Operation,
                 OptionalPath = null,
                 Current = 0,
                 Total = 0,
@@ -37,28 +40,33 @@ internal sealed record ProgressSnapshot(
             ProgressEventKind.RepositoryFound => this with
             {
                 Phase = progressEvent.Kind,
+                Operation = progressEvent.Operation,
                 OptionalPath = progressEvent.Path,
                 RepositoryCount = progressEvent.RepositoryCount,
             },
             ProgressEventKind.DiscoveryCompleted => this with
             {
                 Phase = progressEvent.Kind,
+                Operation = progressEvent.Operation,
                 OptionalPath = null,
                 RepositoryCount = progressEvent.RepositoryCount,
             },
             ProgressEventKind.RepositoryScanStarted or ProgressEventKind.RepositoryScanCompleted => this with
             {
                 Phase = progressEvent.Kind,
+                Operation = progressEvent.Operation,
                 OptionalPath = progressEvent.Path,
                 Current = progressEvent.Current,
                 Total = progressEvent.Total,
                 CandidateCount = progressEvent.CandidateCount,
+                FindingCount = progressEvent.FindingCount,
                 EstimatedBytes = progressEvent.EstimatedBytes,
                 DryRun = progressEvent.DryRun,
             },
             ProgressEventKind.CandidateStarted => this with
             {
                 Phase = progressEvent.Kind,
+                Operation = progressEvent.Operation,
                 OptionalPath = progressEvent.Path,
                 Current = progressEvent.Current,
                 Total = progressEvent.Total,
@@ -73,11 +81,13 @@ internal sealed record ProgressSnapshot(
             ProgressEventKind.Completed or ProgressEventKind.Interrupted => this with
             {
                 Phase = progressEvent.Kind,
+                Operation = progressEvent.Operation,
                 OptionalPath = null,
                 Current = progressEvent.Current,
                 Total = progressEvent.Total,
                 RepositoryCount = progressEvent.RepositoryCount,
                 CandidateCount = progressEvent.CandidateCount,
+                FindingCount = progressEvent.FindingCount,
                 DeletedCount = progressEvent.DeletedCount,
                 ValidatedCount = progressEvent.ValidatedCount,
                 SkippedCount = progressEvent.SkippedCount,
@@ -89,6 +99,7 @@ internal sealed record ProgressSnapshot(
             ProgressEventKind.Failed => this with
             {
                 Phase = progressEvent.Kind,
+                Operation = progressEvent.Operation,
                 OptionalPath = null,
             },
             _ => this,
@@ -101,6 +112,9 @@ internal sealed record ProgressSnapshot(
         {
             ProgressEventKind.DiscoveryStarted or ProgressEventKind.RepositoryFound =>
                 $"Discovering repositories • {RepositoryCount} found",
+            ProgressEventKind.RepositoryScanStarted or ProgressEventKind.RepositoryScanCompleted
+                when Operation == ProgressOperation.Audit =>
+                $"Auditing repositories {Current}/{Total} • {FindingCount} findings • {ProgressText.FormatBytes(EstimatedBytes)}",
             ProgressEventKind.RepositoryScanStarted or ProgressEventKind.RepositoryScanCompleted =>
                 $"Scanning repositories {Current}/{Total} • {CandidateCount} candidates • {ProgressText.FormatBytes(EstimatedBytes)}",
             ProgressEventKind.CandidateStarted or ProgressEventKind.CandidateCompleted when DryRun =>
@@ -124,6 +138,7 @@ internal sealed record ProgressSnapshot(
         return this with
         {
             Phase = progressEvent.Kind,
+            Operation = progressEvent.Operation,
             OptionalPath = progressEvent.Path,
             Current = progressEvent.Current,
             Total = progressEvent.Total,

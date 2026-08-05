@@ -1,6 +1,7 @@
 namespace RepoGlean.Output;
 
 using RepoGlean.Scanning;
+using RepoGlean.Progress;
 
 public sealed record HumanReportOptions(bool Details, bool Quiet, bool Verbose, bool UseColor)
 {
@@ -9,6 +10,43 @@ public sealed record HumanReportOptions(bool Details, bool Quiet, bool Verbose, 
 
 public static class HumanReportWriter
 {
+    public static void WriteAudit(
+        AuditReportDocument report,
+        long minimumBytes,
+        TextWriter output,
+        HumanReportOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentOutOfRangeException.ThrowIfNegative(minimumBytes);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(options);
+
+        WriteHeading(output, "Audit summary", options.UseColor);
+        output.WriteLine($"Repositories: {report.Totals.RepositoryCount}");
+        output.WriteLine($"Unclassified findings: {report.Totals.FindingCount}");
+        output.WriteLine($"Estimated unclassified storage: {FormatBytes(report.Totals.EstimatedBytes)}");
+        output.WriteLine($"Minimum finding size: {FormatBytes(minimumBytes)}");
+
+        if (options.Quiet) return;
+
+        output.WriteLine();
+        output.WriteLine($"Roots: {string.Join(", ", report.EffectiveRoots.Select(ProgressText.Sanitize))}");
+        foreach (var repository in report.Repositories)
+        {
+            output.WriteLine();
+            output.WriteLine(ProgressText.Sanitize(repository.Root));
+            foreach (var finding in repository.Findings)
+            {
+                output.WriteLine($"  {FormatBytes(finding.EstimatedBytes),-18} {finding.FileCount} files  {ProgressText.Sanitize(finding.RelativePath)}");
+                var provenance = FormatIgnoreProvenance(finding);
+                if (!string.IsNullOrEmpty(provenance)) output.WriteLine($"                     ignored by {provenance}");
+            }
+        }
+
+        WriteMessages(output, "Warnings", report.Warnings, options.Verbose);
+        WriteMessages(output, "Errors", report.Errors, options.Verbose);
+    }
+
     public static void WriteScan(ReportDocument report, TextWriter output, HumanReportOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(report);
@@ -212,6 +250,18 @@ public static class HumanReportWriter
     }
 
     private static string YesNo(bool value) => value ? "yes" : "no";
+
+    private static string? FormatIgnoreProvenance(AuditFindingReport finding)
+    {
+        if (finding.IgnoreSource is null && finding.IgnoreSourceLine is null && finding.IgnorePattern is null) return null;
+
+        var source = finding.IgnoreSource is null ? "(unknown)" : ProgressText.Sanitize(finding.IgnoreSource);
+        var sourceWithLine = finding.IgnoreSourceLine is null
+            ? source
+            : $"{source}:{finding.IgnoreSourceLine.Value}";
+        var pattern = finding.IgnorePattern is null ? "(unknown)" : ProgressText.Sanitize(finding.IgnorePattern);
+        return $"{sourceWithLine}  {pattern}";
+    }
 
     private static void WriteHeading(TextWriter output, string heading, bool useColor)
     {

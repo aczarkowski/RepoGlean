@@ -16,4 +16,8 @@ namespace RepoGlean.Output;
 [JsonSerializable(typeof(PlanningCandidateReport))]
 [JsonSerializable(typeof(ReclaimPlanReport))]
 [JsonSerializable(typeof(ReclaimTargetReport))]
+[JsonSerializable(typeof(AuditReportDocument))]
+[JsonSerializable(typeof(AuditFindingReport))]
+[JsonSerializable(typeof(AuditRepositoryReport))]
+[JsonSerializable(typeof(AuditTotalsReport))]
 internal partial class ReportJsonContext : JsonSerializerContext;

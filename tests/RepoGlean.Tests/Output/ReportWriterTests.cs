@@ -1,6 +1,8 @@
 using System.Text.Json;
+using RepoGlean.Auditing;
 using RepoGlean.Cli;
 using RepoGlean.Cleaning;
+using RepoGlean.Git;
 using RepoGlean.Output;
 using RepoGlean.Scanning;
 
@@ -8,6 +10,57 @@ namespace RepoGlean.Tests.Output;
 
 public sealed class ReportWriterTests
 {
+    [Fact]
+    public void Human_audit_groups_findings_and_quiet_mode_retains_only_summary()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "repoglean-audit-human-root");
+        var repository = Path.Combine(root, "repository");
+        var report = AuditReportDocument.FromAudit(
+            [root],
+            new AuditResult(
+                [new RepositoryAuditResult(
+                    repository,
+                    [new AuditFinding(
+                        repository,
+                        Path.Combine(repository, "unknown\\u\u0001\n"),
+                        "unknown\\u\u0001\n",
+                        2,
+                        2048,
+                        null,
+                        new GitIgnoreMatch("unknown", Path.Combine(repository, ".gitignore"), 42, "/unknown/\u0002"))],
+                    2,
+                    2048,
+                    [])],
+                2,
+                2048,
+                [new OperationWarning(Path.Combine(repository, "warning\u0003"), "warning detail")]));
+        using var normal = new StringWriter();
+        using var quiet = new StringWriter();
+
+        HumanReportWriter.WriteAudit(report, 1024, normal, HumanReportOptions.Default);
+        HumanReportWriter.WriteAudit(report, 1024, quiet, new HumanReportOptions(false, true, true, false));
+
+        var text = normal.ToString();
+        Assert.Contains("Repositories: 1", text, StringComparison.Ordinal);
+        Assert.Contains("Unclassified findings: 1", text, StringComparison.Ordinal);
+        Assert.Contains("Estimated unclassified storage: 2 KiB estimated", text, StringComparison.Ordinal);
+        Assert.Contains("Minimum finding size: 1 KiB estimated", text, StringComparison.Ordinal);
+        Assert.Contains(repository, text, StringComparison.Ordinal);
+        Assert.Contains(".gitignore:42  /unknown/", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u0001", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u0002", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("safe", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("eligible", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("reclaimable", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("deletable", text, StringComparison.OrdinalIgnoreCase);
+
+        var quietText = quiet.ToString();
+        Assert.Contains("Repositories: 1", quietText, StringComparison.Ordinal);
+        Assert.Contains("Unclassified findings: 1", quietText, StringComparison.Ordinal);
+        Assert.DoesNotContain(repository, quietText, StringComparison.Ordinal);
+        Assert.DoesNotContain("warning detail", quietText, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Human_report_is_size_first_marks_estimates_and_emits_details_on_request()
     {

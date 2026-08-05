@@ -12,4 +12,13 @@ public static class JsonReportWriter
         var json = JsonSerializer.Serialize(report, ReportJsonContext.Default.ReportDocument);
         await output.WriteLineAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
+
+    public static async Task WriteAsync(AuditReportDocument report, TextWriter output, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(output);
+        cancellationToken.ThrowIfCancellationRequested();
+        var json = JsonSerializer.Serialize(report, ReportJsonContext.Default.AuditReportDocument);
+        await output.WriteLineAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
+    }
 }

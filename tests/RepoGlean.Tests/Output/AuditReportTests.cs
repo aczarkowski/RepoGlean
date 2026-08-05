@@ -69,6 +69,57 @@ public sealed class AuditReportTests
         Assert.Equal(Path.GetFullPath(externalSource), report.Repositories[0].Findings[0].IgnoreSource);
     }
 
+    [Fact]
+    public void Quiet_human_audit_keeps_failure_and_interruption_errors()
+    {
+        using var failureOutput = new StringWriter();
+        using var interruptionOutput = new StringWriter();
+
+        HumanReportWriter.WriteAudit(
+            AuditReportDocument.Failure("Git is unavailable."),
+            1024,
+            failureOutput,
+            new HumanReportOptions(false, true, false, false));
+        HumanReportWriter.WriteAudit(
+            AuditReportDocument.Interrupted(),
+            1024,
+            interruptionOutput,
+            new HumanReportOptions(false, true, false, false));
+
+        var failure = failureOutput.ToString();
+        Assert.Contains("Audit summary", failure, StringComparison.Ordinal);
+        Assert.Contains("Git is unavailable.", failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("Roots:", failure, StringComparison.Ordinal);
+
+        var interruption = interruptionOutput.ToString();
+        Assert.Contains("Operation interrupted.", interruption, StringComparison.Ordinal);
+        Assert.DoesNotContain("Roots:", interruption, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Verbose_human_audit_sanitizes_warning_and_error_details()
+    {
+        var report = new AuditReportDocument(
+            1,
+            "audit",
+            "partial",
+            [],
+            [],
+            new AuditTotalsReport(0, 0, 0, 0),
+            [new ReportMessage("warning\u001b[31m\npath", "warning\u001b[2J\nmessage")],
+            [new ReportMessage("error\u001b[31m\npath", "error\u001b[2J\nmessage")]);
+        using var output = new StringWriter();
+
+        HumanReportWriter.WriteAudit(report, 0, output, new HumanReportOptions(false, false, true, false));
+
+        var text = output.ToString();
+        Assert.Contains("warning[31mpath: warning[2Jmessage", text, StringComparison.Ordinal);
+        Assert.Contains("error[31mpath: error[2Jmessage", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u001b", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("warning\nmessage", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("error\nmessage", text, StringComparison.Ordinal);
+    }
+
     private static AuditFixture CreateFixture()
     {
         var root = Path.Combine(Path.GetTempPath(), "repoglean-audit-report-root");

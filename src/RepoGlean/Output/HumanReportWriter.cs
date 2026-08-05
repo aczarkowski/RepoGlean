@@ -27,7 +27,11 @@ public static class HumanReportWriter
         output.WriteLine($"Estimated unclassified storage: {FormatBytes(report.Totals.EstimatedBytes)}");
         output.WriteLine($"Minimum finding size: {FormatBytes(minimumBytes)}");
 
-        if (options.Quiet) return;
+        if (options.Quiet)
+        {
+            WriteAuditMessages(output, "Errors", report.Errors, includeDetails: true);
+            return;
+        }
 
         output.WriteLine();
         output.WriteLine($"Roots: {string.Join(", ", report.EffectiveRoots.Select(ProgressText.Sanitize))}");
@@ -43,8 +47,8 @@ public static class HumanReportWriter
             }
         }
 
-        WriteMessages(output, "Warnings", report.Warnings, options.Verbose);
-        WriteMessages(output, "Errors", report.Errors, options.Verbose);
+        WriteAuditMessages(output, "Warnings", report.Warnings, options.Verbose);
+        WriteAuditMessages(output, "Errors", report.Errors, options.Verbose);
     }
 
     public static void WriteScan(ReportDocument report, TextWriter output, HumanReportOptions? options = null)
@@ -250,6 +254,21 @@ public static class HumanReportWriter
     }
 
     private static string YesNo(bool value) => value ? "yes" : "no";
+
+    private static void WriteAuditMessages(
+        TextWriter output,
+        string label,
+        IReadOnlyList<ReportMessage> messages,
+        bool includeDetails)
+    {
+        if (messages.Count == 0) return;
+        output.WriteLine($"{label}: {messages.Count}");
+        if (!includeDetails) return;
+        foreach (var message in messages)
+        {
+            output.WriteLine($"  {ProgressText.Sanitize(message.Path)}: {ProgressText.Sanitize(message.Message)}");
+        }
+    }
 
     private static string? FormatIgnoreProvenance(AuditFindingReport finding)
     {

@@ -44,7 +44,7 @@ public sealed class RepositoryScanner
         if (repositoryRoots.Count > 0) cancellationToken.ThrowIfCancellationRequested();
         var selectedRepositoryRoots = repositoryRoots
             .Select(Path.GetFullPath)
-            .Distinct(PathComparer)
+            .Distinct(RepositoryPathPolicy.PathComparer)
             .Where(repositoryRoot => MatchesRepositoryFilter(repositoryRoot, options.RepositoryFilters))
             .ToArray();
         long cumulativeCandidateCount = 0;
@@ -153,7 +153,7 @@ public sealed class RepositoryScanner
         results.Sort((left, right) =>
         {
             var byBytes = right.EstimatedBytes.CompareTo(left.EstimatedBytes);
-            return byBytes != 0 ? byBytes : PathComparer.Compare(left.RepositoryRoot, right.RepositoryRoot);
+            return byBytes != 0 ? byBytes : RepositoryPathPolicy.PathComparer.Compare(left.RepositoryRoot, right.RepositoryRoot);
         });
         long totalFiles = 0;
         long totalBytes = 0;
@@ -211,13 +211,13 @@ public sealed class RepositoryScanner
                 continue;
             }
 
-            foreach (var entry in entries.OrderBy(path => path, PathComparer))
+            foreach (var entry in entries.OrderBy(path => path, RepositoryPathPolicy.PathComparer))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase)) continue;
-                var relativePath = NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, entry));
-                var reservedQuarantine = IsReservedRootQuarantine(relativePath);
-                if (!reservedQuarantine && IsExcluded(entry, relativePath, options.Exclusions)) continue;
+                var relativePath = RepositoryPathPolicy.NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, entry));
+                var reservedQuarantine = RepositoryPathPolicy.IsReservedRootQuarantine(relativePath);
+                if (!reservedQuarantine && RepositoryPathPolicy.IsExcluded(entry, relativePath, options.Exclusions)) continue;
 
                 FileAttributes attributes;
                 try
@@ -240,7 +240,7 @@ public sealed class RepositoryScanner
                     continue;
                 }
 
-                if (reservedQuarantine && IsExcluded(entry, relativePath, options.Exclusions)) continue;
+                if (reservedQuarantine && RepositoryPathPolicy.IsExcluded(entry, relativePath, options.Exclusions)) continue;
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     if (activeRules.Any(rule => rule.Matches(relativePath)))
@@ -250,7 +250,7 @@ public sealed class RepositoryScanner
 
                     continue;
                 }
-                if (isDirectory && IsRepositoryBoundary(entry))
+                if (isDirectory && RepositoryPathPolicy.IsRepositoryBoundary(entry))
                 {
                     AddWarning(warnings, new OperationWarning(entry, "Skipped nested repository boundary."));
                     continue;
@@ -361,7 +361,7 @@ public sealed class RepositoryScanner
                 continue;
             }
 
-            if (ContainsVisibleContent(match.RelativePath, visiblePaths))
+            if (RepositoryPathPolicy.ContainsVisibleContent(match.RelativePath, visiblePaths))
             {
                 AddWarning(warnings, new OperationWarning(match.AbsolutePath, "Ignored candidate contains tracked or otherwise visible content."));
                 continue;
@@ -441,40 +441,13 @@ public sealed class RepositoryScanner
         and not StackOverflowException
         and not AccessViolationException;
 
-    private static bool ContainsVisibleContent(string candidateRelativePath, IReadOnlyList<string> visiblePaths)
-    {
-        var prefix = candidateRelativePath.EndsWith("/", StringComparison.Ordinal) ? candidateRelativePath : $"{candidateRelativePath}/";
-        return visiblePaths.Any(path => string.Equals(path, candidateRelativePath, StringComparison.Ordinal) || path.StartsWith(prefix, StringComparison.Ordinal));
-    }
-
-    private static bool IsRepositoryBoundary(string directory) =>
-        Directory.Exists(Path.Combine(directory, ".git")) || File.Exists(Path.Combine(directory, ".git"));
-
     private static bool MatchesRepositoryFilter(string repositoryRoot, IReadOnlyList<string> filters)
     {
         if (filters.Count == 0) return true;
         var name = Path.GetFileName(repositoryRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return filters.Any(filter =>
             string.Equals(filter, name, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(Path.GetFullPath(filter), repositoryRoot, PathComparison));
-    }
-
-    private static bool IsExcluded(string absolutePath, string relativePath, IReadOnlyList<string> exclusions)
-    {
-        foreach (var exclusion in exclusions)
-        {
-            if (string.IsNullOrWhiteSpace(exclusion)) continue;
-            if (Path.IsPathRooted(exclusion) && RepositoryDiscovery.IsSameOrDescendant(absolutePath, Path.GetFullPath(exclusion))) return true;
-            var normalized = NormalizeRelativePath(exclusion).TrimEnd('/');
-            if (string.Equals(relativePath, normalized, StringComparison.OrdinalIgnoreCase) ||
-                relativePath.StartsWith($"{normalized}/", StringComparison.OrdinalIgnoreCase) ||
-                GlobMatcher.IsMatch(normalized, relativePath))
-            {
-                return true;
-            }
-        }
-
-        return false;
+            string.Equals(Path.GetFullPath(filter), repositoryRoot, RepositoryPathPolicy.PathComparison));
     }
 
     private static int CompareCandidates(ArtifactCandidate left, ArtifactCandidate right)
@@ -482,16 +455,6 @@ public sealed class RepositoryScanner
         var byBytes = right.EstimatedBytes.CompareTo(left.EstimatedBytes);
         return byBytes != 0 ? byBytes : string.Compare(left.RelativePath, right.RelativePath, StringComparison.Ordinal);
     }
-
-    private static string NormalizeRelativePath(string path) => path.Replace('\\', '/').TrimStart('/');
-
-    private static bool IsReservedRootQuarantine(string relativePath) =>
-        !relativePath.Contains('/', StringComparison.Ordinal) &&
-        relativePath.StartsWith(GitClient.QuarantineDirectoryPrefix, StringComparison.OrdinalIgnoreCase);
-
-    private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
-    private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private sealed record PendingMatch(string AbsolutePath, string RelativePath, bool IsDirectory, ArtifactRule Rule);
 }

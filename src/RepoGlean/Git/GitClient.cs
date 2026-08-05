@@ -186,10 +186,23 @@ public sealed class GitClient
         return ignoredPaths;
     }
 
-    public async Task<IReadOnlyDictionary<string, GitIgnoreMatch>> GetIgnoreMatchesAsync(
+    public Task<IReadOnlyDictionary<string, GitIgnoreMatch>> GetIgnoreMatchesAsync(
         string repositoryRoot,
         IReadOnlyList<string> repositoryRelativePaths,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        GetIgnoreMatchesCoreAsync(repositoryRoot, repositoryRelativePaths, ignoreIndex: false, cancellationToken);
+
+    internal Task<IReadOnlyDictionary<string, GitIgnoreMatch>> GetIgnoreMatchesWithoutIndexAsync(
+        string repositoryRoot,
+        IReadOnlyList<string> repositoryRelativePaths,
+        CancellationToken cancellationToken = default) =>
+        GetIgnoreMatchesCoreAsync(repositoryRoot, repositoryRelativePaths, ignoreIndex: true, cancellationToken);
+
+    private async Task<IReadOnlyDictionary<string, GitIgnoreMatch>> GetIgnoreMatchesCoreAsync(
+        string repositoryRoot,
+        IReadOnlyList<string> repositoryRelativePaths,
+        bool ignoreIndex,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         ArgumentNullException.ThrowIfNull(repositoryRelativePaths);
@@ -205,8 +218,11 @@ public sealed class GitClient
         var matches = new Dictionary<string, GitIgnoreMatch>(StringComparer.Ordinal);
         foreach (var batch in normalizedPaths.Chunk(MaximumCheckIgnoreBatchSize))
         {
+            var arguments = new List<string> { "-C", Path.GetFullPath(repositoryRoot), "check-ignore" };
+            if (ignoreIndex) arguments.Add("--no-index");
+            arguments.AddRange(["--verbose", "--non-matching", "--stdin", "-z"]);
             var result = await runner.RunAsync(
-                ["-C", Path.GetFullPath(repositoryRoot), "check-ignore", "--verbose", "--non-matching", "--stdin", "-z"],
+                arguments,
                 null,
                 cancellationToken,
                 string.Concat(batch.Select(static path => $"{path}\0"))).ConfigureAwait(false);

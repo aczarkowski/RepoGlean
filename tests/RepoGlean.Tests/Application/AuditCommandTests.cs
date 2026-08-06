@@ -7,6 +7,28 @@ namespace RepoGlean.Tests.Application;
 public sealed class AuditCommandTests
 {
     [Fact]
+    public async Task Audit_refuses_a_repository_root_link_with_a_trailing_separator_after_discovery()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateAuditRepositoryAsync(temporary.GetPath("repository"), "unknown", 23);
+        var link = temporary.GetPath("repository-link");
+        Directory.CreateSymbolicLink(link, repository.Path);
+
+        var result = await RunAsync([
+            "audit", link + Path.DirectorySeparatorChar, "--min-size", "0", "--format", "json",
+        ]);
+
+        Assert.Equal(3, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("partial", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(0, document.RootElement.GetProperty("totals").GetProperty("findingCount").GetInt64());
+        Assert.Contains(document.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
+            warning.GetProperty("path").GetString()!.TrimEnd(Path.DirectorySeparatorChar) == link &&
+            warning.GetProperty("message").GetString()!.Contains("link", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Audit_uses_cli_roots_over_configured_roots_and_configured_roots_over_home()
     {
         using var temporary = new TemporaryDirectory();

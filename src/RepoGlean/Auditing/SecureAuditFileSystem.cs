@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -16,7 +17,8 @@ internal enum SecureAuditCheckpoint
 internal sealed record SecureAuditIdentity(
     ulong VolumeId,
     string MountId,
-    ulong FileId,
+    ulong FileIdLow,
+    ulong FileIdHigh,
     FileSystemEntryKind Kind);
 
 internal interface ISecureAuditEntry : IDisposable
@@ -37,7 +39,10 @@ internal interface ISecureAuditEntry : IDisposable
 
     string? InspectionError { get; }
 
-    bool TryEnumerate(out IReadOnlyList<ISecureAuditEntry> entries, out string? error);
+    bool TryEnumerate(
+        CancellationToken cancellationToken,
+        out IReadOnlyList<ISecureAuditEntry> entries,
+        out string? error);
 
     bool TryReopen(out ISecureAuditEntry? entry, out string? error);
 }
@@ -66,10 +71,11 @@ internal sealed class SecureAuditFileSystem : ISecureAuditFileSystem
         // aliases in its ancestors (for example macOS /var -> /private/var); the final root component
         // is opened without following it, and every audited descendant is opened relative to a held
         // directory handle with no-follow semantics and stable-identity rechecks.
+        var normalizedRoot = NormalizeRootPath(absolutePath);
         if (OperatingSystem.IsWindows())
         {
             return WindowsSecureAuditEntry.TryOpenRoot(
-                Path.GetFullPath(absolutePath),
+                normalizedRoot,
                 mountOverride,
                 timestampOverride,
                 out root,
@@ -79,7 +85,7 @@ internal sealed class SecureAuditFileSystem : ISecureAuditFileSystem
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
             return UnixSecureAuditEntry.TryOpenRoot(
-                Path.GetFullPath(absolutePath),
+                normalizedRoot,
                 mountOverride,
                 timestampOverride,
                 out root,
@@ -89,6 +95,22 @@ internal sealed class SecureAuditFileSystem : ISecureAuditFileSystem
         root = null;
         error = $"Secure no-follow audit traversal is unavailable on {RuntimeInformation.OSDescription}.";
         return false;
+    }
+
+    internal static string NormalizeRootPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var filesystemRoot = Path.GetPathRoot(fullPath);
+        if (filesystemRoot is not null &&
+            string.Equals(
+                fullPath,
+                filesystemRoot,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        {
+            return fullPath;
+        }
+
+        return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 }
 
@@ -187,8 +209,12 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
         return true;
     }
 
-    public bool TryEnumerate(out IReadOnlyList<ISecureAuditEntry> entries, out string? error)
+    public bool TryEnumerate(
+        CancellationToken cancellationToken,
+        out IReadOnlyList<ISecureAuditEntry> entries,
+        out string? error)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (disposed || Kind != FileSystemEntryKind.Directory)
         {
             entries = [];
@@ -218,8 +244,10 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
         {
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 Marshal.SetLastPInvokeError(0);
                 var nativeEntry = ReadDir(directory);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (nativeEntry == IntPtr.Zero)
                 {
                     var errorCode = Marshal.GetLastPInvokeError();
@@ -246,7 +274,15 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
                 }
 
                 openedEntries.Add(child!);
+                cancellationToken.ThrowIfCancellationRequested();
             }
+        }
+        catch (OperationCanceledException)
+        {
+            DisposeAll(openedEntries);
+            entries = [];
+            error = null;
+            throw;
         }
         finally
         {
@@ -293,7 +329,7 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
                     childPath,
                     -1,
                     this,
-                    new SecureAuditIdentity(0, "link", 0, FileSystemEntryKind.Link),
+                    new SecureAuditIdentity(0, "link", 0, 0, FileSystemEntryKind.Link),
                     new FileSystemMountIdentity(0, "link"),
                     0,
                     null,
@@ -308,19 +344,28 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
             return false;
         }
 
-        if (!TryCreate(
-                name,
-                childPath,
-                descriptor,
-                this,
-                mountOverride,
-                timestampOverride,
-                out var opened,
-                out error))
+        UnixSecureAuditEntry? opened;
+        try
+        {
+            if (!TryCreate(
+                    name,
+                    childPath,
+                    descriptor,
+                    this,
+                    mountOverride,
+                    timestampOverride,
+                    out opened,
+                    out error))
+            {
+                Close(descriptor);
+                entry = null;
+                return false;
+            }
+        }
+        catch
         {
             Close(descriptor);
-            entry = null;
-            return false;
+            throw;
         }
 
         entry = opened;
@@ -553,7 +598,7 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
         var kind = GetUnixEntryKind(information.Mode);
         var volumeId = ((ulong)information.DeviceMajor << 32) | information.DeviceMinor;
         var mountId = information.MountId.ToString(CultureInfo.InvariantCulture);
-        identity = new SecureAuditIdentity(volumeId, mountId, information.Inode, kind);
+        identity = new SecureAuditIdentity(volumeId, mountId, information.Inode, 0, kind);
         mountIdentity = new FileSystemMountIdentity(volumeId, mountId);
         length = information.Size > long.MaxValue ? long.MaxValue : (long)information.Size;
         timestamp = FromUnixTime(information.ModificationTime.Seconds, information.ModificationTime.Nanoseconds);
@@ -574,7 +619,7 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
         var kind = GetUnixEntryKind(information.Mode);
         var volumeId = unchecked((uint)information.Device);
         var mountId = $"darwin-device:{volumeId.ToString(CultureInfo.InvariantCulture)}";
-        identity = new SecureAuditIdentity(volumeId, mountId, information.Inode, kind);
+        identity = new SecureAuditIdentity(volumeId, mountId, information.Inode, 0, kind);
         mountIdentity = new FileSystemMountIdentity(volumeId, mountId);
         length = Math.Max(0, information.Size);
         timestamp = FromUnixTime(information.ModificationTime.Seconds, information.ModificationTime.Nanoseconds);
@@ -868,8 +913,12 @@ internal sealed class WindowsSecureAuditEntry : ISecureAuditEntry
         return true;
     }
 
-    public bool TryEnumerate(out IReadOnlyList<ISecureAuditEntry> entries, out string? error)
+    public bool TryEnumerate(
+        CancellationToken cancellationToken,
+        out IReadOnlyList<ISecureAuditEntry> entries,
+        out string? error)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (handle.IsClosed || handle.IsInvalid || Kind != FileSystemEntryKind.Directory)
         {
             entries = [];
@@ -881,74 +930,91 @@ internal sealed class WindowsSecureAuditEntry : ISecureAuditEntry
         const int errorNoMoreFiles = 18;
         var buffer = new byte[64 * 1024];
         var openedEntries = new List<ISecureAuditEntry>();
-        while (true)
+        try
         {
-            if (!GetFileInformationByHandleEx(handle, fileIdBothDirectoryInfo, buffer, (uint)buffer.Length))
-            {
-                var errorCode = Marshal.GetLastPInvokeError();
-                if (errorCode == errorNoMoreFiles) break;
-                DisposeAll(openedEntries);
-                entries = [];
-                error = NativeError("Unable to enumerate the secure Windows audit directory handle", errorCode);
-                return false;
-            }
-
-            var offset = 0;
             while (true)
             {
-                var nextOffset = BitConverter.ToUInt32(buffer, offset);
-                var attributes = BitConverter.ToUInt32(buffer, offset + 56);
-                var rawNameLength = BitConverter.ToUInt32(buffer, offset + 60);
-                if (rawNameLength > buffer.Length - offset - 104)
+                cancellationToken.ThrowIfCancellationRequested();
+                var enumerated = GetFileInformationByHandleEx(
+                    handle,
+                    fileIdBothDirectoryInfo,
+                    buffer,
+                    (uint)buffer.Length);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!enumerated)
                 {
+                    var errorCode = Marshal.GetLastPInvokeError();
+                    if (errorCode == errorNoMoreFiles) break;
                     DisposeAll(openedEntries);
                     entries = [];
-                    error = "Windows returned malformed handle-relative directory enumeration data.";
+                    error = NativeError("Unable to enumerate the secure Windows audit directory handle", errorCode);
                     return false;
                 }
 
-                var nameLength = (int)rawNameLength;
-                var name = Encoding.Unicode.GetString(buffer, offset + 104, nameLength);
-                if (name is not ("." or ".."))
+                var offset = 0;
+                while (true)
                 {
-                    if (!TrySnapshotChild(
-                            name,
-                            attributes,
-                            BitConverter.ToInt64(buffer, offset + 40),
-                            BitConverter.ToInt64(buffer, offset + 24),
-                            BitConverter.ToUInt64(buffer, offset + 96),
-                            out var child,
-                            out var childError))
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var nextOffset = BitConverter.ToUInt32(buffer, offset);
+                    var attributes = BitConverter.ToUInt32(buffer, offset + 56);
+                    var rawNameLength = BitConverter.ToUInt32(buffer, offset + 60);
+                    if (rawNameLength > buffer.Length - offset - 104)
                     {
-                        openedEntries.Add(new UnavailableSecureAuditEntry(
-                            name,
-                            Path.Combine(AbsolutePath, name),
-                            childError ?? "Unable to securely inspect the audit entry."));
+                        DisposeAll(openedEntries);
+                        entries = [];
+                        error = "Windows returned malformed handle-relative directory enumeration data.";
+                        return false;
                     }
-                    else
+
+                    var nameLength = (int)rawNameLength;
+                    var name = Encoding.Unicode.GetString(buffer, offset + 104, nameLength);
+                    if (name is not ("." or ".."))
                     {
-                        openedEntries.Add(child!);
+                        if (!TrySnapshotChild(
+                                name,
+                                attributes,
+                                out var child,
+                                out var childError))
+                        {
+                            openedEntries.Add(new UnavailableSecureAuditEntry(
+                                name,
+                                Path.Combine(AbsolutePath, name),
+                                childError ?? "Unable to securely inspect the audit entry."));
+                        }
+                        else
+                        {
+                            openedEntries.Add(child!);
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
                     }
-                }
 
-                if (nextOffset == 0) break;
-                if (nextOffset > int.MaxValue || nextOffset > buffer.Length - offset)
-                {
-                    DisposeAll(openedEntries);
-                    entries = [];
-                    error = "Windows returned malformed handle-relative directory enumeration data.";
-                    return false;
-                }
+                    if (nextOffset == 0) break;
+                    if (nextOffset > int.MaxValue || nextOffset > buffer.Length - offset)
+                    {
+                        DisposeAll(openedEntries);
+                        entries = [];
+                        error = "Windows returned malformed handle-relative directory enumeration data.";
+                        return false;
+                    }
 
-                offset += (int)nextOffset;
-                if (offset < 0 || offset + 104 > buffer.Length)
-                {
-                    DisposeAll(openedEntries);
-                    entries = [];
-                    error = "Windows returned malformed handle-relative directory enumeration data.";
-                    return false;
+                    offset += (int)nextOffset;
+                    if (offset < 0 || offset + 104 > buffer.Length)
+                    {
+                        DisposeAll(openedEntries);
+                        entries = [];
+                        error = "Windows returned malformed handle-relative directory enumeration data.";
+                        return false;
+                    }
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            DisposeAll(openedEntries);
+            entries = [];
+            error = null;
+            throw;
         }
 
         entries = openedEntries;
@@ -982,46 +1048,46 @@ internal sealed class WindowsSecureAuditEntry : ISecureAuditEntry
         out string? error)
     {
         var childPath = Path.Combine(AbsolutePath, name);
-        if (expectedKind == FileSystemEntryKind.Link)
-        {
-            entry = new WindowsSecureAuditEntry(
-                name,
-                childPath,
-                new SafeFileHandle(IntPtr.Zero, ownsHandle: false),
-                this,
-                new SecureAuditIdentity(0, "link", 0, FileSystemEntryKind.Link),
-                new FileSystemMountIdentity(0, "link"),
-                0,
-                null,
-                mountOverride,
-                timestampOverride);
-            error = null;
-            return true;
-        }
-
         var desiredAccess = FileReadAttributes | Synchronize |
             (expectedKind == FileSystemEntryKind.Directory ? FileReadData : 0);
-        var createOptions = FileSynchronousIoNonAlert | OpenReparsePoint |
-            (expectedKind == FileSystemEntryKind.Directory ? FileDirectoryFile : FileNonDirectoryFile);
+        var createOptions = FileSynchronousIoNonAlert | OpenReparsePoint;
+        if (expectedKind == FileSystemEntryKind.Directory)
+        {
+            createOptions |= FileDirectoryFile;
+        }
+        else if (expectedKind != FileSystemEntryKind.Link)
+        {
+            createOptions |= FileNonDirectoryFile;
+        }
+
         if (!TryNtOpenRelative(handle, name, desiredAccess, createOptions, out var childHandle, out error))
         {
             entry = null;
             return false;
         }
 
-        if (!TryCreate(
-                name,
-                childPath,
-                childHandle!,
-                this,
-                mountOverride,
-                timestampOverride,
-                out var opened,
-                out error))
+        WindowsSecureAuditEntry? opened;
+        try
+        {
+            if (!TryCreate(
+                    name,
+                    childPath,
+                    childHandle!,
+                    this,
+                    mountOverride,
+                    timestampOverride,
+                    out opened,
+                    out error))
+            {
+                childHandle!.Dispose();
+                entry = null;
+                return false;
+            }
+        }
+        catch
         {
             childHandle!.Dispose();
-            entry = null;
-            return false;
+            throw;
         }
 
         entry = opened;
@@ -1031,69 +1097,39 @@ internal sealed class WindowsSecureAuditEntry : ISecureAuditEntry
     private bool TrySnapshotChild(
         string name,
         uint rawAttributes,
-        long rawLength,
-        long rawLastWriteTime,
-        ulong fileId,
         out ISecureAuditEntry? entry,
         out string? error)
     {
-        var absolutePath = Path.Combine(AbsolutePath, name);
         var attributes = (FileAttributes)rawAttributes;
-        var kind = (attributes & FileAttributes.ReparsePoint) != 0
+        var expectedKind = (attributes & FileAttributes.ReparsePoint) != 0
             ? FileSystemEntryKind.Link
             : (attributes & FileAttributes.Directory) != 0
                 ? FileSystemEntryKind.Directory
                 : (attributes & FileAttributes.Device) != 0
                     ? FileSystemEntryKind.Other
                     : FileSystemEntryKind.RegularFile;
-        var mountIdentity = MountIdentity;
-        var identity = new SecureAuditIdentity(
-            mountIdentity.VolumeId,
-            mountIdentity.MountId,
-            fileId,
-            kind);
-        DateTimeOffset? timestamp;
-        try
+        if (!TryOpenChild(name, expectedKind, out var opened, out error) || opened is null)
         {
-            timestamp = DateTimeOffset.FromFileTime(rawLastWriteTime);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            timestamp = null;
+            entry = null;
+            return false;
         }
 
-        if (mountOverride is not null)
+        using (opened)
         {
-            if (!mountOverride.TryGetMountIdentity(absolutePath, out var overriddenMount, out error) || overriddenMount is null)
-            {
-                entry = null;
-                return false;
-            }
-
-            mountIdentity = overriddenMount;
-            identity = identity with { VolumeId = overriddenMount.VolumeId, MountId = overriddenMount.MountId };
+            entry = new WindowsSecureAuditEntry(
+                name,
+                opened.AbsolutePath,
+                new SafeFileHandle(IntPtr.Zero, ownsHandle: false),
+                this,
+                opened.Identity,
+                opened.MountIdentity,
+                opened.Length,
+                opened.LastWriteTimeUtc,
+                mountOverride,
+                timestampOverride);
+            error = null;
+            return true;
         }
-
-        if (timestampOverride is not null)
-        {
-            timestamp = timestampOverride.TryGetLastWriteTimeUtc(absolutePath, out var overriddenTimestamp)
-                ? overriddenTimestamp
-                : null;
-        }
-
-        entry = new WindowsSecureAuditEntry(
-            name,
-            absolutePath,
-            new SafeFileHandle(IntPtr.Zero, ownsHandle: false),
-            this,
-            identity,
-            mountIdentity,
-            Math.Max(0, rawLength),
-            timestamp,
-            mountOverride,
-            timestampOverride);
-        error = null;
-        return true;
     }
 
     private static bool TryCreate(
@@ -1121,14 +1157,15 @@ internal sealed class WindowsSecureAuditEntry : ISecureAuditEntry
                 : (attributes & FileAttributes.Device) != 0
                     ? FileSystemEntryKind.Other
                     : FileSystemEntryKind.RegularFile;
-        var volumeId = information.VolumeSerialNumber;
-        var mountId = $"windows-volume:{volumeId.ToString(CultureInfo.InvariantCulture)}";
+        if (!TryReadAuthoritativeIdentity(handle, kind, out var identity, out error) || identity is null)
+        {
+            entry = null;
+            return false;
+        }
+
+        var volumeId = identity.VolumeId;
+        var mountId = identity.MountId;
         var mountIdentity = new FileSystemMountIdentity(volumeId, mountId);
-        var identity = new SecureAuditIdentity(
-            volumeId,
-            mountId,
-            ((ulong)information.FileIndexHigh << 32) | information.FileIndexLow,
-            kind);
         if (mountOverride is not null)
         {
             if (!mountOverride.TryGetMountIdentity(absolutePath, out var overriddenMount, out error) || overriddenMount is null)
@@ -1173,6 +1210,61 @@ internal sealed class WindowsSecureAuditEntry : ISecureAuditEntry
             mountOverride,
             timestampOverride);
         error = null;
+        return true;
+    }
+
+    private static bool TryReadAuthoritativeIdentity(
+        SafeFileHandle handle,
+        FileSystemEntryKind kind,
+        out SecureAuditIdentity? identity,
+        out string? error)
+    {
+        const int fileIdInfo = 18;
+        var buffer = new byte[24];
+        if (!GetFileInformationByHandleEx(handle, fileIdInfo, buffer, (uint)buffer.Length))
+        {
+            identity = null;
+            error = NativeError("Unable to read authoritative Windows file identity");
+            return false;
+        }
+
+        var volumeSerialNumber = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(0, 8));
+        if (!TryCreateAuthoritativeIdentity(volumeSerialNumber, buffer.AsSpan(8, 16), kind, out identity))
+        {
+            error = "Windows returned an unavailable or zero authoritative 128-bit file identity.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    internal static bool TryCreateAuthoritativeIdentity(
+        ulong volumeSerialNumber,
+        ReadOnlySpan<byte> fileId,
+        FileSystemEntryKind kind,
+        out SecureAuditIdentity? identity)
+    {
+        if (volumeSerialNumber == 0 || fileId.Length != 16)
+        {
+            identity = null;
+            return false;
+        }
+
+        var low = BinaryPrimitives.ReadUInt64LittleEndian(fileId[..8]);
+        var high = BinaryPrimitives.ReadUInt64LittleEndian(fileId[8..]);
+        if (low == 0 && high == 0)
+        {
+            identity = null;
+            return false;
+        }
+
+        identity = new SecureAuditIdentity(
+            volumeSerialNumber,
+            $"windows-volume:{volumeSerialNumber.ToString(CultureInfo.InvariantCulture)}",
+            low,
+            high,
+            kind);
         return true;
     }
 
@@ -1343,7 +1435,7 @@ internal sealed class UnavailableSecureAuditEntry(
 
     public FileSystemMountIdentity MountIdentity { get; } = new(0, "unavailable");
 
-    public SecureAuditIdentity Identity { get; } = new(0, "unavailable", 0, FileSystemEntryKind.Other);
+    public SecureAuditIdentity Identity { get; } = new(0, "unavailable", 0, 0, FileSystemEntryKind.Other);
 
     public long Length => 0;
 
@@ -1351,8 +1443,12 @@ internal sealed class UnavailableSecureAuditEntry(
 
     public string? InspectionError { get; } = inspectionError;
 
-    public bool TryEnumerate(out IReadOnlyList<ISecureAuditEntry> entries, out string? error)
+    public bool TryEnumerate(
+        CancellationToken cancellationToken,
+        out IReadOnlyList<ISecureAuditEntry> entries,
+        out string? error)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         entries = [];
         error = InspectionError;
         return false;

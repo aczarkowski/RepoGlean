@@ -12,6 +12,50 @@ namespace RepoGlean.Tests.Auditing;
 public sealed class RepositoryAuditorTests
 {
     [Fact]
+    public async Task Direct_audit_accepts_a_regular_repository_root_with_a_trailing_separator()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "unknown/\n");
+        await repository.CommitAllAsync();
+        repository.WriteBytes("unknown/file.bin", 7);
+
+        var repositoryWithSeparator = repository.Path + Path.DirectorySeparatorChar;
+        var result = await new RepositoryAuditor(new GitClient()).AuditAsync(
+            [repository.Path + Path.DirectorySeparatorChar],
+            RuleCatalog.Create(RepoGleanConfig.Default),
+            new AuditOptions([repositoryWithSeparator], [], 0));
+
+        var finding = Assert.Single(Assert.Single(result.Repositories).Findings);
+        Assert.Equal("unknown", finding.RelativePath);
+        Assert.Equal(7, finding.EstimatedBytes);
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public async Task Audit_propagates_cancellation_raised_during_secure_backend_enumeration()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
+        repository.Write(".gitignore", "*.bin\n");
+        await repository.CommitAllAsync();
+        repository.WriteBytes("one.bin", 3);
+        repository.WriteBytes("two.bin", 5);
+        using var source = new CancellationTokenSource();
+        var timestamps = new CancelOnDescendantTimestampProvider(repository.Path, source);
+        var auditor = new RepositoryAuditor(
+            new GitClient(),
+            new SecureAuditFileSystem(timestampOverride: timestamps),
+            NullOperationProgress.Instance);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => auditor.AuditAsync(
+            [repository.Path],
+            RuleCatalog.Create(RepoGleanConfig.Default),
+            new AuditOptions([], [], 0),
+            source.Token));
+    }
+
+    [Fact]
     public async Task Audit_collapses_unknown_storage_and_carves_classified_and_visible_branches()
     {
         using var temporary = new TemporaryDirectory();
@@ -750,6 +794,18 @@ public sealed class RepositoryAuditorTests
 
             value = configured.GetValueOrDefault();
             return configured.HasValue;
+        }
+    }
+
+    private sealed class CancelOnDescendantTimestampProvider(
+        string root,
+        CancellationTokenSource source) : IFileTimestampProvider
+    {
+        public bool TryGetLastWriteTimeUtc(string path, out DateTimeOffset value)
+        {
+            if (!string.Equals(path, root, StringComparison.Ordinal)) source.Cancel();
+            value = DateTimeOffset.UnixEpoch;
+            return true;
         }
     }
 }

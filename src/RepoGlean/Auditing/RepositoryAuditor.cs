@@ -66,7 +66,7 @@ public sealed class RepositoryAuditor
 
         if (repositoryRoots.Count > 0) cancellationToken.ThrowIfCancellationRequested();
         var selectedRepositoryRoots = repositoryRoots
-            .Select(Path.GetFullPath)
+            .Select(SecureAuditFileSystem.NormalizeRootPath)
             .Distinct(RepositoryPathPolicy.PathComparer)
             .Where(repositoryRoot => MatchesRepositoryFilter(repositoryRoot, options.RepositoryFilters))
             .ToArray();
@@ -233,7 +233,7 @@ public sealed class RepositoryAuditor
         List<OperationWarning> warnings,
         CancellationToken cancellationToken)
     {
-        if (!directory.TryEnumerate(out var secureEntries, out var enumerationError))
+        if (!directory.TryEnumerate(cancellationToken, out var secureEntries, out var enumerationError))
         {
             AddWarning(
                 warnings,
@@ -553,7 +553,7 @@ public sealed class RepositoryAuditor
         return filters.Any(filter =>
             string.Equals(filter, name, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(
-                Path.GetFullPath(filter),
+                SecureAuditFileSystem.NormalizeRootPath(filter),
                 repositoryRoot,
                 RepositoryPathPolicy.PathComparison));
     }

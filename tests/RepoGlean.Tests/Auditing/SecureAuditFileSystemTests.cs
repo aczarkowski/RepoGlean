@@ -2,6 +2,7 @@ using RepoGlean.Auditing;
 using RepoGlean.Scanning;
 using RepoGlean.Tests.Support;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace RepoGlean.Tests.Auditing;
 
@@ -91,6 +92,24 @@ public sealed class SecureAuditFileSystemTests
 
         Assert.False(UnixSecureAuditEntry.HasRequiredLinuxAuditMetadata(withoutInode));
         Assert.True(UnixSecureAuditEntry.HasRequiredLinuxAuditMetadata(UnixSecureAuditEntry.LinuxRequiredAuditMetadata));
+    }
+
+    [Fact]
+    public void Linux_open_flags_match_each_supported_architecture_abi()
+    {
+        Assert.Equal(0x0800 | 0x20000 | 0x80000, UnixSecureAuditEntry.LinuxGenericOpenFlags(Architecture.X64));
+        Assert.Equal(0x0800 | 0x20000 | 0x80000 | 0x10000, UnixSecureAuditEntry.LinuxDirectoryOpenFlags(Architecture.X64));
+        Assert.Equal(0x0800 | 0x8000 | 0x80000, UnixSecureAuditEntry.LinuxGenericOpenFlags(Architecture.Arm64));
+        Assert.Equal(0x0800 | 0x8000 | 0x80000 | 0x4000, UnixSecureAuditEntry.LinuxDirectoryOpenFlags(Architecture.Arm64));
+        Assert.Throws<PlatformNotSupportedException>(() => UnixSecureAuditEntry.LinuxGenericOpenFlags(Architecture.Arm));
+    }
+
+    [Fact]
+    public void Mac_directory_enumeration_selects_the_inode64_symbol_only_on_x64()
+    {
+        Assert.True(UnixSecureAuditEntry.MacUsesInode64ReadDir(Architecture.X64));
+        Assert.False(UnixSecureAuditEntry.MacUsesInode64ReadDir(Architecture.Arm64));
+        Assert.Throws<PlatformNotSupportedException>(() => UnixSecureAuditEntry.MacUsesInode64ReadDir(Architecture.Arm));
     }
 
     [Fact]

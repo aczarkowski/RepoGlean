@@ -246,7 +246,7 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 Marshal.SetLastPInvokeError(0);
-                var nativeEntry = ReadDirectory(directory);
+                var nativeEntry = ReadDir(directory);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (nativeEntry == IntPtr.Zero)
                 {
@@ -648,7 +648,9 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
 
     private static string ReadDirectoryEntryName(IntPtr entry)
     {
-        var nameOffset = OperatingSystem.IsMacOS() ? 21 : 19;
+        var nameOffset = DirectoryEntryNameOffset(
+            OperatingSystem.IsMacOS(),
+            RuntimeInformation.ProcessArchitecture);
         var maximumLength = OperatingSystem.IsMacOS() ? 1024 : 256;
         var bytes = new byte[maximumLength];
         Marshal.Copy(IntPtr.Add(entry, nameOffset), bytes, 0, bytes.Length);
@@ -675,13 +677,15 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
                 $"Secure Linux audit traversal is unavailable on architecture {architecture}."),
         };
 
-    internal static bool MacUsesInode64ReadDir(Architecture architecture) => architecture switch
-    {
-        Architecture.X64 => true,
-        Architecture.Arm64 => false,
-        _ => throw new PlatformNotSupportedException(
-            $"Secure macOS audit traversal is unavailable on architecture {architecture}."),
-    };
+    internal static int DirectoryEntryNameOffset(bool isMacOs, Architecture architecture) =>
+        (isMacOs, architecture) switch
+        {
+            (false, Architecture.X64 or Architecture.Arm64) => 19,
+            (true, Architecture.X64) => 20,
+            (true, Architecture.Arm64) => 21,
+            _ => throw new PlatformNotSupportedException(
+                $"Secure Unix audit traversal is unavailable on architecture {architecture}."),
+        };
 
     private static int GenericOpenFlags() => OperatingSystem.IsMacOS()
         ? 0x0004 | 0x0100 | 0x01000000
@@ -690,14 +694,6 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
     private static int DirectoryOpenFlags() => OperatingSystem.IsMacOS()
         ? GenericOpenFlags() | 0x00100000
         : LinuxDirectoryOpenFlags(RuntimeInformation.ProcessArchitecture);
-
-    private static IntPtr ReadDirectory(IntPtr directory)
-    {
-        if (!OperatingSystem.IsMacOS()) return ReadDir(directory);
-        return MacUsesInode64ReadDir(RuntimeInformation.ProcessArchitecture)
-            ? ReadDirMacX64(directory)
-            : ReadDir(directory);
-    }
 
     private static int LoopError() => OperatingSystem.IsMacOS() ? 62 : 40;
 
@@ -726,9 +722,6 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
 
     [DllImport("libc", EntryPoint = "readdir", SetLastError = true)]
     private static extern IntPtr ReadDir(IntPtr directory);
-
-    [DllImport("libc", EntryPoint = "readdir$INODE64", SetLastError = true)]
-    private static extern IntPtr ReadDirMacX64(IntPtr directory);
 
     [DllImport("libc", EntryPoint = "closedir", SetLastError = true)]
     private static extern int CloseDir(IntPtr directory);

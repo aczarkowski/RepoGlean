@@ -105,11 +105,14 @@ public sealed class SecureAuditFileSystemTests
     }
 
     [Fact]
-    public void Mac_directory_enumeration_selects_the_inode64_symbol_only_on_x64()
+    public void Directory_entry_name_offsets_match_each_supported_unix_abi()
     {
-        Assert.True(UnixSecureAuditEntry.MacUsesInode64ReadDir(Architecture.X64));
-        Assert.False(UnixSecureAuditEntry.MacUsesInode64ReadDir(Architecture.Arm64));
-        Assert.Throws<PlatformNotSupportedException>(() => UnixSecureAuditEntry.MacUsesInode64ReadDir(Architecture.Arm));
+        Assert.Equal(19, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: false, Architecture.X64));
+        Assert.Equal(19, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: false, Architecture.Arm64));
+        Assert.Equal(20, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: true, Architecture.X64));
+        Assert.Equal(21, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: true, Architecture.Arm64));
+        Assert.Throws<PlatformNotSupportedException>(() =>
+            UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: true, Architecture.Arm));
     }
 
     [Fact]

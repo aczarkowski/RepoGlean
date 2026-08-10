@@ -56,14 +56,12 @@ public sealed class InteractiveProgressRendererTests
             ProgressOperation.Scan,
             Path: "/work/my-api",
             RepositoryCount: 12));
-        ticker.Tick();
-        await Task.Yield();
+        await ticker.TickAsync();
         Assert.Equal(pausedOutput, writer.Snapshot);
 
         renderer.Resume();
         Assert.Equal(pausedOutput, writer.Snapshot);
-        ticker.Tick();
-        await Task.Yield();
+        await ticker.TickAsync();
         Assert.Equal(pausedOutput, writer.Snapshot);
 
         renderer.Report(new OperationProgressEvent(
@@ -443,14 +441,31 @@ public sealed class InteractiveProgressRendererTests
 
 internal sealed class ManualProgressTicker : IProgressTicker
 {
-    private readonly Channel<bool> ticks = Channel.CreateUnbounded<bool>();
+    private readonly Channel<TaskCompletionSource<bool>> ticks =
+        Channel.CreateUnbounded<TaskCompletionSource<bool>>();
+    private TaskCompletionSource<bool>? processedTick;
 
     public int DisposeCount { get; private set; }
 
-    public void Tick() => ticks.Writer.TryWrite(true);
+    public void Tick() => ticks.Writer.TryWrite(CreateTick());
 
-    public async ValueTask<bool> WaitForNextTickAsync(CancellationToken cancellationToken) =>
-        await ticks.Reader.ReadAsync(cancellationToken);
+    public async Task TickAsync()
+    {
+        var tick = CreateTick();
+        if (!ticks.Writer.TryWrite(tick))
+        {
+            throw new InvalidOperationException("The progress ticker is no longer accepting ticks.");
+        }
+
+        await tick.Task;
+    }
+
+    public async ValueTask<bool> WaitForNextTickAsync(CancellationToken cancellationToken)
+    {
+        processedTick?.TrySetResult(true);
+        processedTick = await ticks.Reader.ReadAsync(cancellationToken);
+        return true;
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -458,6 +473,9 @@ internal sealed class ManualProgressTicker : IProgressTicker
         ticks.Writer.TryComplete();
         return ValueTask.CompletedTask;
     }
+
+    private static TaskCompletionSource<bool> CreateTick() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
 internal sealed class WaitFailingProgressTicker : IProgressTicker

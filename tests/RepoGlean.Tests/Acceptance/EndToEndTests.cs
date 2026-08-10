@@ -306,7 +306,9 @@ public sealed class EndToEndTests
         var afterStatus = await repository.GitAsync(
             "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching");
         var after = SnapshotWorkingTree(repository.Path);
-        Assert.Equal(0, result.ExitCode);
+        Assert.True(
+            result.ExitCode == 0,
+            $"Audit exited with {result.ExitCode}. stdout: {result.Stdout} stderr: {result.Stderr}");
         Assert.Equal(string.Empty, result.Stderr);
         using var document = JsonDocument.Parse(result.Stdout);
         var root = document.RootElement;

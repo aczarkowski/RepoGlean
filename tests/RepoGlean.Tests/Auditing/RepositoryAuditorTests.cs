@@ -354,7 +354,7 @@ public sealed class RepositoryAuditorTests
     }
 
     [Fact]
-    public async Task Audit_preserves_spaces_unicode_tabs_and_platform_supported_newlines()
+    public async Task Audit_preserves_platform_supported_spaces_unicode_and_control_characters()
     {
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
@@ -364,9 +364,12 @@ public sealed class RepositoryAuditorTests
         {
             ("cache space", 1),
             ("cache-λ", 2),
-            ("cache\ttab", 3),
         };
-        if (!OperatingSystem.IsWindows()) expected.Add(("cache\nline", 4));
+        if (!OperatingSystem.IsWindows())
+        {
+            expected.Add(("cache\ttab", 3));
+            expected.Add(("cache\nline", 4));
+        }
         foreach (var item in expected) repository.WriteBytes($"{item.Path}/payload.bin", item.Size);
 
         var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 
 namespace RepoGlean.Git;
 
@@ -26,18 +27,7 @@ internal sealed class ProcessRunner
         string? standardInput = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executable,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = standardInput is not null,
-            CreateNoWindow = true,
-        };
-        if (!string.IsNullOrWhiteSpace(workingDirectory)) startInfo.WorkingDirectory = workingDirectory;
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
-        foreach (var pair in environment) startInfo.Environment[pair.Key] = pair.Value;
+        var startInfo = CreateStartInfo(arguments, workingDirectory, standardInput is not null);
 
         Process process;
         try
@@ -92,5 +82,29 @@ internal sealed class ProcessRunner
                 throw;
             }
         }
+    }
+
+    internal ProcessStartInfo CreateStartInfo(
+        IReadOnlyList<string> arguments,
+        string? workingDirectory,
+        bool redirectStandardInput)
+    {
+        var utf8WithoutPreamble = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = redirectStandardInput,
+            StandardOutputEncoding = utf8WithoutPreamble,
+            StandardErrorEncoding = utf8WithoutPreamble,
+            CreateNoWindow = true,
+        };
+        if (redirectStandardInput) startInfo.StandardInputEncoding = utf8WithoutPreamble;
+        if (!string.IsNullOrWhiteSpace(workingDirectory)) startInfo.WorkingDirectory = workingDirectory;
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        foreach (var pair in environment) startInfo.Environment[pair.Key] = pair.Value;
+        return startInfo;
     }
 }

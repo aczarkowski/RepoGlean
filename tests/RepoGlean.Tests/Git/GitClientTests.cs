@@ -112,7 +112,8 @@ public sealed class GitClientTests
         await repository.GitAsync("add", "-f", "visible/file.bin");
         await repository.GitAsync("commit", "--quiet", "-m", "tracked visible path");
         repository.Write("cache space/payload.bin", "ignored");
-        var paths = new List<string> { "cache space", "visible/file.bin" };
+        repository.Write("cache-λ/payload.bin", "ignored");
+        var paths = new List<string> { "cache space", "cache-λ", "visible/file.bin" };
         if (!OperatingSystem.IsWindows())
         {
             repository.Write("cache\nline/payload.bin", "ignored");
@@ -127,6 +128,10 @@ public sealed class GitClientTests
         Assert.Equal(2, ignored.SourceLine);
         Assert.Equal("cache*/", ignored.Pattern);
         Assert.Equal("cache space", ignored.Path);
+        var unicode = matches["cache-λ"];
+        Assert.True(unicode.IsIgnored);
+        Assert.Equal("cache*/", unicode.Pattern);
+        Assert.Equal("cache-λ", unicode.Path);
         Assert.False(matches["visible/file.bin"].IsIgnored);
         if (!OperatingSystem.IsWindows()) Assert.True(matches["cache\nline"].IsIgnored);
     }

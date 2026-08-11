@@ -33,7 +33,7 @@ public sealed class RepositoryAuditorTests
     }
 
     [Fact]
-    public async Task Audit_propagates_cancellation_raised_during_secure_backend_enumeration()
+    public async Task Audit_propagates_cancellation_raised_during_portable_backend_enumeration()
     {
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
@@ -45,7 +45,8 @@ public sealed class RepositoryAuditorTests
         var timestamps = new CancelOnDescendantTimestampProvider(repository.Path, source);
         var auditor = new RepositoryAuditor(
             new GitClient(),
-            new SecureAuditFileSystem(timestampOverride: timestamps),
+            new AuditFileSystem(timestamps),
+            new StubVolumeBoundary(),
             NullOperationProgress.Instance);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => auditor.AuditAsync(
@@ -351,6 +352,21 @@ public sealed class RepositoryAuditorTests
         Assert.Contains(
             new OperationWarning(foreign, "Skipped path on a different filesystem mount or volume."),
             result.Warnings);
+
+        var failingBoundary = new FailingVolumeBoundary();
+        var crossMountResult = await new RepositoryAuditor(
+            new GitClient(),
+            new AuditFileSystem(new StubTimestampProvider()),
+            failingBoundary,
+            NullOperationProgress.Instance).AuditAsync(
+                [repository.Path],
+                RuleCatalog.Create(RepoGleanConfig.Default),
+                new AuditOptions([], [], 0, CrossMounts: true));
+
+        var crossMountFinding = Assert.Single(crossMountResult.Repositories.Single().Findings);
+        Assert.Equal(2, crossMountFinding.FileCount);
+        Assert.Equal(36, crossMountFinding.EstimatedBytes);
+        Assert.Equal(0, failingBoundary.CallCount);
     }
 
     [Fact]
@@ -423,30 +439,6 @@ public sealed class RepositoryAuditorTests
     }
 
     [Fact]
-    public async Task Audit_omits_an_ignored_fifo_as_a_non_regular_filesystem_entry()
-    {
-        if (OperatingSystem.IsWindows()) return;
-        using var temporary = new TemporaryDirectory();
-        var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
-        repository.Write(".gitignore", "regular.bin\nspecial.pipe\n");
-        await repository.CommitAllAsync();
-        repository.WriteBytes("regular.bin", 7);
-        await GitTestRepository.RunAsync("mkfifo", repository.Path, null, "special.pipe");
-
-        var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
-
-        var finding = Assert.Single(result.Repositories.Single().Findings);
-        Assert.Equal("regular.bin", finding.RelativePath);
-        Assert.Equal(1, result.FileCount);
-        Assert.Equal(7, result.EstimatedBytes);
-        Assert.Contains(
-            new OperationWarning(
-                repository.GetPath("special.pipe"),
-                "Skipped non-regular audit filesystem entry."),
-            result.Warnings);
-    }
-
-    [Fact]
     public async Task Audit_revalidates_a_directory_replaced_by_a_link_during_git_classification()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -487,7 +479,7 @@ public sealed class RepositoryAuditorTests
     }
 
     [Fact]
-    public async Task Audit_omits_a_directory_swapped_to_a_same_mount_link_immediately_before_secure_enumeration()
+    public async Task Audit_omits_a_directory_deleted_immediately_before_enumeration()
     {
         if (OperatingSystem.IsWindows()) return;
         using var temporary = new TemporaryDirectory();
@@ -496,22 +488,17 @@ public sealed class RepositoryAuditorTests
         await repository.CommitAllAsync();
         var target = repository.GetPath("unknown");
         repository.WriteBytes("unknown/local.bin", 7);
-        var relocated = repository.GetPath("relocated-original");
-        var external = temporary.GetPath("external");
-        Directory.CreateDirectory(external);
-        var externalPayload = Path.Combine(external, "outside.bin");
-        File.WriteAllBytes(externalPayload, new byte[31]);
-        var swapped = false;
+        var deleted = false;
         var auditor = new RepositoryAuditor(
             new GitClient(),
-            new SecureAuditFileSystem(),
+            new AuditFileSystem(),
+            new StubVolumeBoundary(),
             NullOperationProgress.Instance,
             (checkpoint, path) =>
             {
-                if (swapped || checkpoint != SecureAuditCheckpoint.BeforeDirectoryEnumeration || path != target) return;
-                swapped = true;
-                Directory.Move(target, relocated);
-                Directory.CreateSymbolicLink(target, external);
+                if (deleted || checkpoint != AuditCheckpoint.BeforeDirectoryEnumeration || path != target) return;
+                deleted = true;
+                Directory.Delete(target, recursive: true);
             });
 
         var result = await auditor.AuditAsync(
@@ -519,17 +506,16 @@ public sealed class RepositoryAuditorTests
             RuleCatalog.Create(RepoGleanConfig.Default),
             new AuditOptions([], [], 0));
 
-        Assert.True(swapped);
+        Assert.True(deleted);
         Assert.Empty(result.Repositories.Single().Findings);
         Assert.Equal(0, result.EstimatedBytes);
         Assert.Contains(result.Warnings, warning =>
             warning.Path == target &&
-            warning.Message.Contains("changed identity or type during inspection", StringComparison.Ordinal));
-        Assert.Equal(31, new FileInfo(externalPayload).Length);
+            warning.Message.Contains("inspect", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public async Task Audit_omits_a_file_swapped_to_a_same_mount_link_immediately_before_secure_measurement()
+    public async Task Audit_omits_a_file_deleted_immediately_before_measurement()
     {
         if (OperatingSystem.IsWindows()) return;
         using var temporary = new TemporaryDirectory();
@@ -538,20 +524,17 @@ public sealed class RepositoryAuditorTests
         await repository.CommitAllAsync();
         var target = repository.GetPath("unknown.bin");
         repository.WriteBytes("unknown.bin", 7);
-        var relocated = repository.GetPath("relocated-original.bin");
-        var external = temporary.GetPath("outside.bin");
-        File.WriteAllBytes(external, new byte[37]);
-        var swapped = false;
+        var deleted = false;
         var auditor = new RepositoryAuditor(
             new GitClient(),
-            new SecureAuditFileSystem(),
+            new AuditFileSystem(),
+            new StubVolumeBoundary(),
             NullOperationProgress.Instance,
             (checkpoint, path) =>
             {
-                if (swapped || checkpoint != SecureAuditCheckpoint.BeforeFileMeasurement || path != target) return;
-                swapped = true;
-                File.Move(target, relocated);
-                File.CreateSymbolicLink(target, external);
+                if (deleted || checkpoint != AuditCheckpoint.BeforeFileMeasurement || path != target) return;
+                deleted = true;
+                File.Delete(target);
             });
 
         var result = await auditor.AuditAsync(
@@ -559,13 +542,12 @@ public sealed class RepositoryAuditorTests
             RuleCatalog.Create(RepoGleanConfig.Default),
             new AuditOptions([], [], 0));
 
-        Assert.True(swapped);
+        Assert.True(deleted);
         Assert.Empty(result.Repositories.Single().Findings);
         Assert.Equal(0, result.EstimatedBytes);
         Assert.Contains(result.Warnings, warning =>
             warning.Path == target &&
-            warning.Message.Contains("changed identity or type during inspection", StringComparison.Ordinal));
-        Assert.Equal(37, new FileInfo(external).Length);
+            warning.Message.Contains("inspect", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -781,6 +763,19 @@ public sealed class RepositoryAuditorTests
                 : new FileSystemMountIdentity(1, "repository");
             error = null;
             return true;
+        }
+    }
+
+    private sealed class FailingVolumeBoundary : IVolumeBoundary
+    {
+        public int CallCount { get; private set; }
+
+        public bool TryGetMountIdentity(string path, out FileSystemMountIdentity? identity, out string? error)
+        {
+            CallCount++;
+            identity = null;
+            error = "Mount identity unavailable.";
+            return false;
         }
     }
 

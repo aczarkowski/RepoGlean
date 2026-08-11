@@ -7,6 +7,19 @@ namespace RepoGlean.Tests.Application;
 public sealed class AuditCommandTests
 {
     [Fact]
+    public async Task Audit_accepts_cross_mounts_option()
+    {
+        using var temporary = new TemporaryDirectory();
+        var repository = await CreateAuditRepositoryAsync(temporary.GetPath("repository"), "unknown", 23);
+
+        var result = await RunAsync([
+            "audit", repository.Path, "--cross-mounts", "--min-size", "0", "--format", "json",
+        ]);
+
+        Assert.NotEqual(2, result.ExitCode);
+    }
+
+    [Fact]
     public async Task Audit_refuses_a_repository_root_link_with_a_trailing_separator_after_discovery()
     {
         if (OperatingSystem.IsWindows()) return;

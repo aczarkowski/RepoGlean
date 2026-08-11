@@ -25,6 +25,7 @@ public static class CliParser
         var quiet = false;
         var verbose = false;
         var noProgress = false;
+        var crossMounts = false;
         var usedOptions = new List<string>();
 
         for (var index = 0; index < arguments.Length; index++)
@@ -82,6 +83,7 @@ public static class CliParser
                     case "--quiet": quiet = true; break;
                     case "--verbose": verbose = true; break;
                     case "--no-progress": noProgress = true; break;
+                    case "--cross-mounts": crossMounts = true; break;
                     case "--help": help = true; break;
                     case "--version": version = true; break;
                     default: return ParseResult<CliOptions>.Failure($"Unknown option '{argument}'.");
@@ -187,7 +189,8 @@ public static class CliParser
             version,
             quiet,
             verbose,
-            noProgress));
+            noProgress,
+            crossMounts));
     }
 
     private static bool TryReadValue(string[] arguments, ref int index, string option, out string value, out string error)
@@ -274,7 +277,7 @@ public static class CliParser
             "--all-drives" or "--details" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
         CommandKind.Audit => option is
             "--repo" or "--exclude" or "--min-size" or "--format" or "--config" or
-            "--all-drives" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
+            "--all-drives" or "--cross-mounts" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",
         CommandKind.Plan => option is
             "--repo" or "--category" or "--exclude" or "--min-size" or "--free" or "--format" or "--config" or
             "--all-drives" or "--all" or "--no-color" or "--quiet" or "--verbose" or "--no-progress",

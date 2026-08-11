@@ -665,7 +665,7 @@ public static class RepoGleanApp
                 .AuditAsync(
                     discovery.Repositories,
                     RuleCatalog.Create(config),
-                    new AuditOptions(options.Repositories, exclusions, minimumBytes),
+                    new AuditOptions(options.Repositories, exclusions, minimumBytes, options.CrossMounts),
                     cancellationToken)
                 .ConfigureAwait(false);
             if (discovery.Warnings.Count > 0)

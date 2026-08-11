@@ -51,7 +51,8 @@ public sealed record CliOptions
         bool version,
         bool quiet = false,
         bool verbose = false,
-        bool noProgress = false)
+        bool noProgress = false,
+        bool crossMounts = false)
     {
         Command = command;
         Roots = Freeze(roots);
@@ -73,6 +74,7 @@ public sealed record CliOptions
         Quiet = quiet;
         Verbose = verbose;
         NoProgress = noProgress;
+        CrossMounts = crossMounts;
     }
 
     public CommandKind Command { get; }
@@ -114,6 +116,8 @@ public sealed record CliOptions
     public bool Verbose { get; }
 
     public bool NoProgress { get; }
+
+    public bool CrossMounts { get; }
 
     private static IReadOnlyList<T> Freeze<T>(IReadOnlyList<T> values) => Array.AsReadOnly(values.ToArray());
 }

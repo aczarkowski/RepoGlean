@@ -11,12 +11,24 @@ public sealed class CliParserTests
             "audit", "root", "--repo", "api", "--exclude", "tmp/**",
             "--min-size", "0", "--all-drives", "--format", "json",
             "--config", "config.json", "--quiet", "--verbose",
-            "--no-color", "--no-progress",
+            "--no-color", "--no-progress", "--cross-mounts",
         ]);
 
         Assert.True(result.IsSuccess, result.Error);
         Assert.Equal(CommandKind.Audit, result.Value!.Command);
         Assert.Equal(0, result.Value.MinimumBytes);
+        Assert.True(result.Value.CrossMounts);
+    }
+
+    [Theory]
+    [InlineData("scan")]
+    [InlineData("plan", "--free", "1B")]
+    [InlineData("clean", "--dry-run")]
+    public void Parse_cross_mounts_is_audit_only(params string[] command)
+    {
+        var result = CliParser.Parse([.. command, "--cross-mounts"]);
+
+        Assert.False(result.IsSuccess);
     }
 
     [Theory]

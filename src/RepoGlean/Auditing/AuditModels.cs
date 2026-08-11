@@ -6,7 +6,8 @@ namespace RepoGlean.Auditing;
 public sealed record AuditOptions(
     IReadOnlyList<string> RepositoryFilters,
     IReadOnlyList<string> Exclusions,
-    long MinimumBytes)
+    long MinimumBytes,
+    bool CrossMounts = false)
 {
     public const long DefaultMinimumBytes = 100L * 1024 * 1024;
 }

@@ -76,6 +76,7 @@ Options outside the listed commands are usage errors with exit code 2.
 | `--exclude path-or-glob` | `scan`, `audit`, `plan`, `clean` | Add a root-relative path, absolute path, or repository-relative glob exclusion; repeatable. |
 | `--min-size size` | `scan`, `audit`, `plan`, `clean` | Require an estimated minimum size such as `500MB` or `2GiB`; audit defaults to `100 MiB` and also accepts the exact value `0`. |
 | `--all-drives` | `scan`, `audit`, `plan`, `clean` | Add accessible fixed-drive roots to the requested roots. |
+| `--cross-mounts` | `audit` | Traverse directories on foreign or unidentified mounts instead of pruning them. Links and reparse points remain boundaries. |
 | `--details` | `scan` | Include candidate rows in the final scan report. |
 | `--free size` | `plan`, `clean` | Request a positive estimated reclaim target such as `5GB` or `20GiB`; required for `plan`. |
 | `--dry-run` | `clean` | Validate and report selected candidates without deletion or prompts. |
@@ -119,6 +120,9 @@ repoglean audit ~/src
 # Include every non-empty ignored-but-unclassified finding in one JSON document.
 repoglean audit ~/src --min-size 0 --format json --no-progress
 
+# Opt into auditing directories on other or unidentified filesystem mounts.
+repoglean audit ~/src --cross-mounts
+
 # Plan a target that the eligible pool can meet without changing files.
 repoglean plan ~/src --free 5GiB
 
@@ -152,9 +156,11 @@ Audit uses the same roots, repository filters, exclusions, drive discovery, conf
 
 Each finding is the highest honest, non-overlapping ignored tree whose totals describe only unclassified content. Active-rule branches are carved out even when scan would reject them as cleanup candidates, and tracked or otherwise Git-visible branches are not counted. Disabled built-in rules do not classify matching paths. Thresholding happens after those branches are removed, so a large ignored parent can fall below the threshold when its recognized content is excluded.
 
-Git is the sole authority for ignored status and provenance. Each finding includes the matching ignore source, nullable source line, and pattern when Git supplies them. Repository-contained sources are reported relative to the repository; external sources are normalized absolute paths. RepoGlean does not parse `.gitignore` itself. It also does not follow filesystem links or cross mounts, enter nested repositories or reserved quarantine trees, or guess when Git or filesystem state is uncertain; affected paths are omitted with warnings.
+Git is the sole authority for ignored status and provenance. Each finding includes the matching ignore source, nullable source line, and pattern when Git supplies them. Repository-contained sources are reported relative to the repository; external sources are normalized absolute paths. RepoGlean does not parse `.gitignore` itself.
 
-Audit sizes are saturating logical file-length estimates, not physical allocation or guaranteed free space. The audit is an advisory snapshot of files observed during its read-only walk. It never modifies repository content, Git state, configuration, or ignore rules.
+Audit uses an iterative, best-effort .NET filesystem snapshot with no configured traversal-depth limit. It never follows links, junctions, or reparse points, and it does not enter nested repositories or reserved quarantine trees. By default it prunes foreign or unidentified mounts; `--cross-mounts` opts into traversing those directories without weakening the link boundary. Paths that disappear or become inaccessible while audit is running are warned about and omitted, while metadata already observed may be stale by the time the report is produced.
+
+Audit sizes are saturating logical file-length estimates, not physical allocation or guaranteed free space. It never modifies repository content, Git state, configuration, or ignore rules. Findings remain evidence only and never authorize cleanup.
 
 ### Reclaim planning
 

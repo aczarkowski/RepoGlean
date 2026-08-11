@@ -917,7 +917,8 @@ public static class RepoGleanApp
         output.WriteLine("Scan options: --repo name --category value --exclude path --min-size size");
         output.WriteLine("              --all-drives --format table|json");
         output.WriteLine("Scan report:  --details (include candidate rows in the final scan report)");
-        output.WriteLine("Audit options: --repo name --exclude path --min-size size --all-drives --format table|json");
+        output.WriteLine("Audit options: --repo name --exclude path --min-size size --all-drives --cross-mounts");
+        output.WriteLine("               --format table|json");
         output.WriteLine("Plan options: --free size --repo name --category value --exclude path");
         output.WriteLine("              --min-size size --all-drives --all --format table|json");
         output.WriteLine("Clean options: --free size --dry-run --yes --all (unattended --yes also requires a scope)");

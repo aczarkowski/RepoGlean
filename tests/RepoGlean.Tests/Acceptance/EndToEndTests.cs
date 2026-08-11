@@ -123,6 +123,7 @@ public sealed class EndToEndTests
         Assert.Equal(0, help.ExitCode);
         Assert.Equal(string.Empty, help.Stderr);
         Assert.Contains("repoglean plan [root ...] --free size [options]", help.Stdout, StringComparison.Ordinal);
+        Assert.Contains("--cross-mounts", help.Stdout, StringComparison.Ordinal);
         Assert.Contains("Plan options: --free size", help.Stdout, StringComparison.Ordinal);
         Assert.Contains("Clean options: --free size", help.Stdout, StringComparison.Ordinal);
 
@@ -300,7 +301,7 @@ public sealed class EndToEndTests
         var before = SnapshotWorkingTree(repository.Path);
 
         var result = await RunExecutableAsync([
-            "audit", repository.Path, "--min-size", "1B", "--format", "json", "--no-progress",
+            "audit", repository.Path, "--cross-mounts", "--min-size", "1B", "--format", "json", "--no-progress",
         ]);
 
         var afterStatus = await repository.GitAsync(

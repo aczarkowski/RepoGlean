@@ -37,7 +37,7 @@
 - Produces: `AuditOptions.CrossMounts : bool`, defaulting to `false` for existing callers.
 - Consumes: existing audit CLI parsing and `RepoGleanApp.RunAuditAsync` option construction.
 
-- [ ] **Step 1: Write failing parser tests**
+- [x] **Step 1: Write failing parser tests**
 
 Extend the accepted audit-options test with `--cross-mounts` and assert the value. Add a rejection theory for non-audit commands:
 
@@ -55,7 +55,7 @@ public void Parse_cross_mounts_is_audit_only(params string[] command)
 }
 ```
 
-- [ ] **Step 2: Run the parser tests and verify RED**
+- [x] **Step 2: Run the parser tests and verify RED**
 
 Run:
 
@@ -65,7 +65,7 @@ dotnet test tests/RepoGlean.Tests/RepoGlean.Tests.csproj --filter FullyQualified
 
 Expected: compilation fails because `CliOptions.CrossMounts` does not exist or parsing rejects the option.
 
-- [ ] **Step 3: Add option plumbing**
+- [x] **Step 3: Add option plumbing**
 
 Add a parser local, switch case, audit allow-list entry, constructor parameter, and property:
 
@@ -92,7 +92,7 @@ public sealed record AuditOptions(
 
 Pass `options.CrossMounts` from `RepoGleanApp.RunAuditAsync` into `AuditOptions`.
 
-- [ ] **Step 4: Add an application propagation test**
+- [x] **Step 4: Add an application propagation test**
 
 Use a repository fixture and invoke:
 
@@ -105,7 +105,7 @@ Assert.NotEqual(RepoGleanApp.UsageExitCode, result.ExitCode);
 
 This test proves the application accepts and routes the flag; mount behavior is covered with injected providers in Task 3.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run:
 
@@ -135,7 +135,7 @@ git commit -m "feat: add audit cross-mount option"
 - Produces: `AuditFileSystem.NormalizeRootPath`.
 - Consumes: `FileSystemEntryKind` and optional `IFileTimestampProvider` from `RepoGlean.Scanning`.
 
-- [ ] **Step 1: Write failing BCL reader tests**
+- [x] **Step 1: Write failing BCL reader tests**
 
 Cover root normalization, immediate-only enumeration, regular-file metadata, directory metadata, link classification, missing entries, and cancellation:
 
@@ -157,7 +157,7 @@ var link = Assert.Single(entries, entry => entry.Name == "external-link");
 Assert.Equal(FileSystemEntryKind.Link, link.Kind);
 ```
 
-- [ ] **Step 2: Run the reader tests and verify RED**
+- [x] **Step 2: Run the reader tests and verify RED**
 
 Run:
 
@@ -167,7 +167,7 @@ dotnet test tests/RepoGlean.Tests/RepoGlean.Tests.csproj --filter FullyQualified
 
 Expected: compilation fails because `AuditFileSystem` and its entry contract do not exist.
 
-- [ ] **Step 3: Implement the minimal portable contract**
+- [x] **Step 3: Implement the minimal portable contract**
 
 Create these production types:
 
@@ -212,7 +212,7 @@ exception is UnauthorizedAccessException or IOException
 
 Preserve the existing optional timestamp provider solely for deterministic tests; production reads `LastWriteTimeUtc` from `FileSystemInfo`.
 
-- [ ] **Step 4: Run focused reader tests and format checks**
+- [x] **Step 4: Run focused reader tests and format checks**
 
 Run:
 
@@ -224,7 +224,7 @@ git diff --check
 
 Expected: all portable reader tests pass with no formatting changes.
 
-- [ ] **Step 5: Commit the reader**
+- [x] **Step 5: Commit the reader**
 
 ```bash
 git add src/RepoGlean/Auditing/AuditFileSystem.cs tests/RepoGlean.Tests/Auditing/AuditFileSystemTests.cs
@@ -246,7 +246,7 @@ git commit -m "refactor: add portable audit filesystem reader"
 - Produces: recursive-path implementation temporarily preserving external audit behavior; Task 4 replaces recursion without changing its tests.
 - Produces: `AuditCheckpoint` with `BeforeDirectoryEnumeration` and `BeforeFileMeasurement` values for deterministic race/cancellation tests.
 
-- [ ] **Step 1: Add failing mount-policy tests**
+- [x] **Step 1: Add failing mount-policy tests**
 
 Use the existing `StubVolumeBoundary` and add a provider that always fails. Verify default pruning and cross-mount bypass:
 
@@ -265,7 +265,7 @@ Assert.Contains(permissive.Repositories.Single().Findings, finding =>
 
 The permissive assertion must also verify the failing provider's call count remains zero.
 
-- [ ] **Step 2: Add failing best-effort change tests**
+- [x] **Step 2: Add failing best-effort change tests**
 
 Retain checkpoint-driven tests but change their expected contract:
 
@@ -281,7 +281,7 @@ checkpoint = (stage, path) =>
 
 Assert the vanished entry is omitted with a warning and its valid sibling remains. Remove expectations that require stable identity, held handles, or link-swap revalidation.
 
-- [ ] **Step 3: Run the focused tests and verify RED**
+- [x] **Step 3: Run the focused tests and verify RED**
 
 Run:
 
@@ -291,7 +291,7 @@ dotnet test tests/RepoGlean.Tests/RepoGlean.Tests.csproj --filter FullyQualified
 
 Expected: tests fail because `CrossMounts` is not enforced and audit still uses secure identities.
 
-- [ ] **Step 4: Migrate `RepositoryAuditor` to snapshots and a separate mount provider**
+- [x] **Step 4: Migrate `RepositoryAuditor` to snapshots and a separate mount provider**
 
 Replace fields and constructors with:
 
@@ -316,7 +316,7 @@ When `CrossMounts` is false, resolve the root mount once. Before descending into
 
 Refactor `AuditEntry` to hold `AuditFileSystemEntry` and remove all `TryReopen`, identity equality, handle disposal, and `TryConfirmUnchanged` paths. At the file checkpoint, re-inspect the path once so an observed deletion becomes a warning; accept ordinary metadata changes as a best-effort snapshot.
 
-- [ ] **Step 5: Delete audit-native code and obsolete tests**
+- [x] **Step 5: Delete audit-native code and obsolete tests**
 
 Delete `SecureAuditFileSystem.cs` and its native-contract test file. Preserve shared identity-provider code and tests under `Scanning` and `Cleaning`. Confirm no audit source references remain:
 
@@ -326,7 +326,7 @@ rg -n "ISecureAuditEntry|SecureAuditIdentity|UnixSecureAuditEntry|WindowsSecureA
 
 Expected: no matches.
 
-- [ ] **Step 6: Run audit-focused acceptance and commit**
+- [x] **Step 6: Run audit-focused acceptance and commit**
 
 Run:
 
@@ -358,7 +358,7 @@ git commit -m "refactor: replace native audit traversal"
 - Produces: one small internal iterative scheduler with enter and complete work items; `RepositoryAuditor` supplies the audit-specific enter and complete operations.
 - Preserves: `AuditResult`, `RepositoryAuditResult`, `AuditFinding`, progress, warnings, Git batching, and deterministic ordering.
 
-- [ ] **Step 1: Write a failing deep-chain test**
+- [x] **Step 1: Write a failing deep-chain test**
 
 Test the production scheduler with a 10,000-node single-child chain represented by integers, without creating OS paths or involving Git. Record enter and completion order and assert all nodes complete in post-order:
 
@@ -380,7 +380,7 @@ This test catches replacing the scheduler with recursive calls. Existing `Reposi
 
 The fake returns immutable snapshots and does not recurse internally.
 
-- [ ] **Step 2: Run the deep test and verify RED**
+- [x] **Step 2: Run the deep test and verify RED**
 
 Run:
 
@@ -390,7 +390,7 @@ dotnet test tests/RepoGlean.Tests/RepoGlean.Tests.csproj --filter FullyQualified
 
 Expected: compilation fails because `IterativeAuditTraversal` does not exist.
 
-- [ ] **Step 3: Implement enter/complete work frames**
+- [x] **Step 3: Implement enter/complete work frames**
 
 Create a small generic internal scheduler whose only responsibility is stack ordering:
 
@@ -462,7 +462,7 @@ await IterativeAuditTraversal.TraverseAsync(
 
 Remove recursive `AuditDirectoryContentsAsync` and `AuditDirectoryAsync` calls. Do not use BCL recursive enumeration.
 
-- [ ] **Step 4: Run deep, focused, and full tests**
+- [x] **Step 4: Run deep, focused, and full tests**
 
 Run:
 
@@ -474,7 +474,7 @@ dotnet test RepoGlean.slnx --no-build
 
 Expected: the deep test and all existing tests pass.
 
-- [ ] **Step 5: Commit iterative traversal**
+- [x] **Step 5: Commit iterative traversal**
 
 ```bash
 git add src/RepoGlean/Auditing/IterativeAuditTraversal.cs src/RepoGlean/Auditing/RepositoryAuditor.cs tests/RepoGlean.Tests/Auditing/IterativeAuditTraversalTests.cs tests/RepoGlean.Tests/Auditing/RepositoryAuditorTests.cs
@@ -495,7 +495,7 @@ git commit -m "refactor: make audit traversal iterative"
 - Consumes: final CLI and traversal behavior.
 - Produces: user-facing help and README contract for default mount pruning, `--cross-mounts`, and best-effort snapshots.
 
-- [ ] **Step 1: Write failing help and end-to-end assertions**
+- [x] **Step 1: Write failing help and end-to-end assertions**
 
 Assert help contains the option and an end-to-end audit accepts it:
 
@@ -507,7 +507,7 @@ var audit = await RunBuiltAsync(
 Assert.Equal(0, audit.ExitCode);
 ```
 
-- [ ] **Step 2: Run the acceptance tests and verify RED**
+- [x] **Step 2: Run the acceptance tests and verify RED**
 
 Run:
 
@@ -517,7 +517,7 @@ dotnet test tests/RepoGlean.Tests/RepoGlean.Tests.csproj --filter "FullyQualifie
 
 Expected: help assertion fails until user-facing text is updated.
 
-- [ ] **Step 3: Update user-facing documentation**
+- [x] **Step 3: Update user-facing documentation**
 
 Add `--cross-mounts` to audit help and the README option matrix. Replace cleanup-grade secure-traversal claims with this exact behavioral boundary:
 
@@ -530,7 +530,7 @@ only and never authorize cleanup.
 
 State that traversal has no configured depth limit and that observed concurrent changes warn or are omitted.
 
-- [ ] **Step 4: Run structural simplification checks**
+- [x] **Step 4: Run structural simplification checks**
 
 Run:
 
@@ -544,7 +544,7 @@ git diff --check
 
 Expected: removed-native searches return no matches and the option appears in code, tests, help, and README.
 
-- [ ] **Step 5: Run full local verification**
+- [x] **Step 5: Run full local verification**
 
 Run:
 
@@ -558,7 +558,7 @@ git diff --check
 
 Expected: restore, warning-as-error build, all tests, formatting, and whitespace checks pass.
 
-- [ ] **Step 6: Run Native AOT acceptance on the available host**
+- [x] **Step 6: Run Native AOT acceptance on the available host**
 
 Run with the host RID (`osx-arm64` in the current workspace):
 
@@ -570,13 +570,13 @@ artifacts/portable-audit/osx-arm64/repoglean audit . --cross-mounts --min-size 0
 
 Expected: Native AOT publish succeeds and the packaged executable produces one valid audit JSON document without an unhandled exception. Qualify the six-platform result as unverified until the branch is pushed and the GitHub Actions matrix completes.
 
-- [ ] **Step 7: Commit documentation and acceptance**
+- [x] **Step 7: Commit documentation and acceptance**
 
 ```bash
 git add README.md src/RepoGlean/RepoGleanApp.cs tests/RepoGlean.Tests/Acceptance/EndToEndTests.cs tests/RepoGlean.Tests/Application/AuditCommandTests.cs
 git commit -m "docs: describe portable audit traversal"
 ```
 
-- [ ] **Step 8: Final review checkpoint**
+- [x] **Step 8: Final review checkpoint**
 
 Review the complete branch against `docs/superpowers/specs/2026-08-11-audit-portable-traversal-design.md`. Confirm every global constraint is represented by implementation or test evidence, no unrelated files changed, and the worktree is clean after commits.

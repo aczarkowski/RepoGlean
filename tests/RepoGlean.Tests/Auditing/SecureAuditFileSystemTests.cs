@@ -109,7 +109,7 @@ public sealed class SecureAuditFileSystemTests
     {
         Assert.Equal(19, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: false, Architecture.X64));
         Assert.Equal(19, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: false, Architecture.Arm64));
-        Assert.Equal(20, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: true, Architecture.X64));
+        Assert.Equal(8, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: true, Architecture.X64));
         Assert.Equal(21, UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: true, Architecture.Arm64));
         Assert.Throws<PlatformNotSupportedException>(() =>
             UnixSecureAuditEntry.DirectoryEntryNameOffset(isMacOs: true, Architecture.Arm));

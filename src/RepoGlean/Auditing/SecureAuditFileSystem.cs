@@ -681,7 +681,7 @@ internal sealed class UnixSecureAuditEntry : ISecureAuditEntry
         (isMacOs, architecture) switch
         {
             (false, Architecture.X64 or Architecture.Arm64) => 19,
-            (true, Architecture.X64) => 20,
+            (true, Architecture.X64) => 8,
             (true, Architecture.Arm64) => 21,
             _ => throw new PlatformNotSupportedException(
                 $"Secure Unix audit traversal is unavailable on architecture {architecture}."),

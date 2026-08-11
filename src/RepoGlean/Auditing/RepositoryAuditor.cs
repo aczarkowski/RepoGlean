@@ -193,7 +193,7 @@ public sealed class RepositoryAuditor
                 continue;
             }
 
-            var aggregate = await AuditDirectoryContentsAsync(
+            var aggregate = await AuditDirectoryIterativelyAsync(
                 repositoryRoot,
                 root,
                 visiblePathSet,
@@ -288,9 +288,9 @@ public sealed class RepositoryAuditor
         return true;
     }
 
-    private async Task<AuditAggregate> AuditDirectoryContentsAsync(
+    private async Task<AuditAggregate> AuditDirectoryIterativelyAsync(
         string repositoryRoot,
-        AuditFileSystemEntry directory,
+        AuditFileSystemEntry root,
         IReadOnlySet<string> visiblePaths,
         IReadOnlyList<ArtifactRule> activeRules,
         AuditOptions options,
@@ -298,24 +298,51 @@ public sealed class RepositoryAuditor
         List<OperationWarning> warnings,
         CancellationToken cancellationToken)
     {
-        if (!fileSystem.TryEnumerate(directory.AbsolutePath, cancellationToken, out var snapshots, out var enumerationError))
+        var rootFrame = new DirectoryFrame(root, relativePath: string.Empty, match: null, parent: null);
+        await IterativeAuditTraversal.TraverseAsync(
+            rootFrame,
+            (frame, token) => EnterDirectoryAsync(
+                repositoryRoot,
+                frame,
+                visiblePaths,
+                activeRules,
+                options,
+                repositoryMount,
+                warnings,
+                token),
+            frame => CompleteDirectory(repositoryRoot, frame),
+            cancellationToken).ConfigureAwait(false);
+        return rootFrame.Aggregate;
+    }
+
+    private async ValueTask<IReadOnlyList<DirectoryFrame>> EnterDirectoryAsync(
+        string repositoryRoot,
+        DirectoryFrame frame,
+        IReadOnlySet<string> visiblePaths,
+        IReadOnlyList<ArtifactRule> activeRules,
+        AuditOptions options,
+        FileSystemMountIdentity? repositoryMount,
+        List<OperationWarning> warnings,
+        CancellationToken cancellationToken)
+    {
+        if (!fileSystem.TryEnumerate(frame.Entry.AbsolutePath, cancellationToken, out var snapshots, out var enumerationError))
         {
             AddWarning(
                 warnings,
-                directory.AbsolutePath,
+                frame.Entry.AbsolutePath,
                 enumerationError ?? "Unable to enumerate the audit directory.");
-            return AuditAggregate.Empty;
+            return [];
         }
 
         var orderedEntries = snapshots
             .OrderBy(entry => entry.Name, RepositoryPathPolicy.PathComparer)
             .ToArray();
-        var isRepositoryRoot = RepositoryPathPolicy.PathComparer.Equals(directory.AbsolutePath, repositoryRoot);
+        var isRepositoryRoot = RepositoryPathPolicy.PathComparer.Equals(frame.Entry.AbsolutePath, repositoryRoot);
         if (!isRepositoryRoot && orderedEntries.Any(entry =>
                 string.Equals(entry.Name, ".git", StringComparison.OrdinalIgnoreCase)))
         {
-            AddWarning(warnings, directory.AbsolutePath, "Skipped nested repository boundary.");
-            return AuditAggregate.Empty;
+            AddWarning(warnings, frame.Entry.AbsolutePath, "Skipped nested repository boundary.");
+            return [];
         }
 
         var entries = new List<AuditEntry>(orderedEntries.Length);
@@ -353,7 +380,7 @@ public sealed class RepositoryAuditor
             entries,
             warnings,
             cancellationToken).ConfigureAwait(false);
-        var aggregate = new AuditAggregate();
+        var children = new List<DirectoryFrame>();
         foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -363,23 +390,36 @@ public sealed class RepositoryAuditor
                 continue;
             }
 
-            var child = refreshed.Kind == FileSystemEntryKind.Directory
-                ? await AuditDirectoryAsync(
-                    repositoryRoot,
-                    entry.RelativePath,
-                    refreshed,
-                    match,
-                    visiblePaths,
-                    activeRules,
-                    options,
-                    repositoryMount,
-                    warnings,
-                    cancellationToken).ConfigureAwait(false)
-                : AuditFile(repositoryRoot, entry.RelativePath, refreshed, match);
-            aggregate.Absorb(child);
+            if (refreshed.Kind == FileSystemEntryKind.Directory)
+            {
+                children.Add(new DirectoryFrame(refreshed, entry.RelativePath, match, frame));
+            }
+            else
+            {
+                frame.Aggregate.Absorb(AuditFile(repositoryRoot, entry.RelativePath, refreshed, match));
+            }
         }
 
-        return aggregate;
+        return children;
+    }
+
+    private static void CompleteDirectory(string repositoryRoot, DirectoryFrame frame)
+    {
+        if (frame.Parent is null || frame.Aggregate.FileCount == 0) return;
+        frame.Aggregate.ObserveTimestamp(frame.Entry.LastWriteTimeUtc);
+        if (frame.Match is { IsIgnored: true } match)
+        {
+            frame.Aggregate.ReplaceFindings(new AuditFinding(
+                repositoryRoot,
+                Path.GetFullPath(frame.Entry.AbsolutePath),
+                frame.RelativePath,
+                frame.Aggregate.FileCount,
+                frame.Aggregate.EstimatedBytes,
+                frame.Aggregate.TimestampUnavailable ? null : frame.Aggregate.NewestWriteTimeUtc,
+                match));
+        }
+
+        frame.Parent.Aggregate.Absorb(frame.Aggregate);
     }
 
     private bool TryRefreshEntry(
@@ -453,43 +493,6 @@ public sealed class RepositoryAuditor
         if (mount == repositoryMount) return true;
         AddWarning(warnings, path, "Skipped path on a different filesystem mount or volume.");
         return false;
-    }
-
-    private async Task<AuditAggregate> AuditDirectoryAsync(
-        string repositoryRoot,
-        string relativePath,
-        AuditFileSystemEntry entry,
-        GitIgnoreMatch match,
-        IReadOnlySet<string> visiblePaths,
-        IReadOnlyList<ArtifactRule> activeRules,
-        AuditOptions options,
-        FileSystemMountIdentity? repositoryMount,
-        List<OperationWarning> warnings,
-        CancellationToken cancellationToken)
-    {
-        var aggregate = await AuditDirectoryContentsAsync(
-            repositoryRoot,
-            entry,
-            visiblePaths,
-            activeRules,
-            options,
-            repositoryMount,
-            warnings,
-            cancellationToken).ConfigureAwait(false);
-        if (aggregate.FileCount == 0) return AuditAggregate.Empty;
-
-        aggregate.ObserveTimestamp(entry.LastWriteTimeUtc);
-        if (!match.IsIgnored) return aggregate;
-
-        aggregate.ReplaceFindings(new AuditFinding(
-            repositoryRoot,
-            Path.GetFullPath(entry.AbsolutePath),
-            relativePath,
-            aggregate.FileCount,
-            aggregate.EstimatedBytes,
-            aggregate.TimestampUnavailable ? null : aggregate.NewestWriteTimeUtc,
-            match));
-        return aggregate;
     }
 
     private static AuditAggregate AuditFile(
@@ -661,6 +664,23 @@ public sealed class RepositoryAuditor
         and not AccessViolationException;
 
     private sealed record AuditEntry(AuditFileSystemEntry Snapshot, string RelativePath);
+
+    private sealed class DirectoryFrame(
+        AuditFileSystemEntry entry,
+        string relativePath,
+        GitIgnoreMatch? match,
+        DirectoryFrame? parent)
+    {
+        internal AuditFileSystemEntry Entry { get; } = entry;
+
+        internal string RelativePath { get; } = relativePath;
+
+        internal GitIgnoreMatch? Match { get; } = match;
+
+        internal DirectoryFrame? Parent { get; } = parent;
+
+        internal AuditAggregate Aggregate { get; } = new();
+    }
 
     private sealed class AuditAggregate
     {

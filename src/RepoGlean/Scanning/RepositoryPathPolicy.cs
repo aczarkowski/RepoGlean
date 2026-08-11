@@ -24,7 +24,11 @@ internal static class RepositoryPathPolicy
     {
         foreach (var exclusion in exclusions)
         {
-            if (string.IsNullOrWhiteSpace(exclusion)) continue;
+            if (string.IsNullOrWhiteSpace(exclusion))
+            {
+                continue;
+            }
+
             if (Path.IsPathRooted(exclusion) &&
                 RepositoryDiscovery.IsSameOrDescendant(absolutePath, Path.GetFullPath(exclusion)))
             {

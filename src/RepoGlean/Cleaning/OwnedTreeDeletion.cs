@@ -46,7 +46,10 @@ internal sealed class OwnedTreeInspector(
                 }
 
                 entries.Add(entry!);
-                if (entry!.Type != OwnedTreeEntryType.Directory) continue;
+                if (entry!.Type != OwnedTreeEntryType.Directory)
+                {
+                    continue;
+                }
 
                 var children = fileSystem.GetFileSystemEntries(current.Path)
                     .OrderBy(path => path, PathComparer)
@@ -149,7 +152,11 @@ internal sealed class OwnedTreeInspector(
 
     private static OwnedTreeEntryType GetEntryType(FileAttributes attributes)
     {
-        if ((attributes & FileAttributes.ReparsePoint) != 0) return OwnedTreeEntryType.Link;
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            return OwnedTreeEntryType.Link;
+        }
+
         return (attributes & FileAttributes.Directory) != 0
             ? OwnedTreeEntryType.Directory
             : OwnedTreeEntryType.File;
@@ -288,7 +295,11 @@ internal sealed class BoundaryAwareDeleter(
 
     private static string GetParent(string relativePath)
     {
-        if (relativePath == ".") return string.Empty;
+        if (relativePath == ".")
+        {
+            return string.Empty;
+        }
+
         var separator = relativePath.LastIndexOf('/');
         return separator < 0 ? "." : relativePath[..separator];
     }

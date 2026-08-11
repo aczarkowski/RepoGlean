@@ -49,7 +49,11 @@ public sealed class GitClient
             ["-C", Path.GetFullPath(path), "rev-parse", "--is-inside-work-tree"],
             null,
             cancellationToken).ConfigureAwait(false);
-        if (result.ExitCode != 0) throw CreateFailure(result, "git rev-parse");
+        if (result.ExitCode != 0)
+        {
+            throw CreateFailure(result, "git rev-parse");
+        }
+
         return string.Equals(result.StandardOutput.Trim(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -173,7 +177,11 @@ public sealed class GitClient
                 null,
                 cancellationToken,
                 standardInput).ConfigureAwait(false);
-            if (result.ExitCode is not (0 or 1)) throw CreateFailure(result, "git check-ignore");
+            if (result.ExitCode is not (0 or 1))
+            {
+                throw CreateFailure(result, "git check-ignore");
+            }
+
             foreach (var path in result.StandardOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries))
             {
                 ignoredPaths.Add(NormalizeRelativePath(path));
@@ -216,14 +224,21 @@ public sealed class GitClient
         foreach (var batch in normalizedPaths.Chunk(MaximumCheckIgnoreBatchSize))
         {
             var arguments = new List<string> { "-C", Path.GetFullPath(repositoryRoot), "check-ignore" };
-            if (ignoreIndex) arguments.Add("--no-index");
+            if (ignoreIndex)
+            {
+                arguments.Add("--no-index");
+            }
+
             arguments.AddRange(["--verbose", "--non-matching", "--stdin", "-z"]);
             var result = await runner.RunAsync(
                 arguments,
                 null,
                 cancellationToken,
                 string.Concat(batch.Select(static path => $"{path}\0"))).ConfigureAwait(false);
-            if (result.ExitCode is not (0 or 1)) throw CreateFailure(result, "git check-ignore");
+            if (result.ExitCode is not (0 or 1))
+            {
+                throw CreateFailure(result, "git check-ignore");
+            }
 
             foreach (var match in ParseIgnoreMatches(result.StandardOutput, batch))
             {
@@ -281,7 +296,11 @@ public sealed class GitClient
         var fields = output.Split('\0');
         if (fields.Length == 1 && fields[0].Length == 0)
         {
-            if (requestedPaths.Count == 0) return [];
+            if (requestedPaths.Count == 0)
+            {
+                return [];
+            }
+
             throw new GitCommandException("git check-ignore returned no provenance records.");
         }
 
@@ -334,7 +353,10 @@ public sealed class GitClient
 
     private static void EnsureSuccess(ProcessResult result, string operation)
     {
-        if (result.ExitCode != 0) throw CreateFailure(result, operation);
+        if (result.ExitCode != 0)
+        {
+            throw CreateFailure(result, operation);
+        }
     }
 
     private static GitCommandException CreateFailure(ProcessResult result, string operation)

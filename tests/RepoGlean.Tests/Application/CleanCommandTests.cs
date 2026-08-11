@@ -310,7 +310,11 @@ public sealed class CleanCommandTests
             "delete\n",
             beforeReadLine: lineNumber =>
             {
-                if (lineNumber != 1) return;
+                if (lineNumber != 1)
+                {
+                    return;
+                }
+
                 Directory.Move(repository.GetPath("obj"), temporary.GetPath("original-obj"));
                 Directory.CreateDirectory(repository.GetPath("obj"));
                 File.WriteAllText(repository.GetPath("obj/replacement.bin"), "replacement");
@@ -532,7 +536,11 @@ public sealed class CleanCommandTests
             "\n\ndelete\n",
             beforeReadLine: lineNumber =>
             {
-                if (lineNumber != 3) return;
+                if (lineNumber != 3)
+                {
+                    return;
+                }
+
                 Directory.Move(repository.GetPath("obj"), temporary.GetPath("original-obj"));
                 Directory.CreateDirectory(repository.GetPath("obj"));
                 File.WriteAllText(repository.GetPath("obj/replacement.bin"), "replacement");
@@ -550,7 +558,10 @@ public sealed class CleanCommandTests
     [Fact]
     public async Task Verbose_cleanup_reports_a_candidate_failure_from_the_authoritative_result()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
 
         using var temporary = new TemporaryDirectory();
         var repository = await CreateRepositoryAsync(temporary.GetPath("repo"));
@@ -566,7 +577,10 @@ public sealed class CleanCommandTests
             gitExecutable: gitWrapper,
             beforeReadLine: lineNumber =>
             {
-                if (lineNumber == 3) File.WriteAllText(markerPath, string.Empty);
+                if (lineNumber == 3)
+                {
+                    File.WriteAllText(markerPath, string.Empty);
+                }
             });
 
         Assert.Equal(3, result.ExitCode);
@@ -638,7 +652,10 @@ public sealed class CleanCommandTests
             "\n\ndelete\n",
             beforeReadLine: lineNumber =>
             {
-                if (lineNumber == 3) cancellation.Cancel();
+                if (lineNumber == 3)
+                {
+                    cancellation.Cancel();
+                }
             },
             cancellationToken: cancellation.Token);
 
@@ -753,7 +770,10 @@ public sealed class CleanCommandTests
         string markerPath,
         string repositoryPath)
     {
-        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        if (OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException();
+        }
 
         static string Quote(string value) => $"'{value.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
 

@@ -79,7 +79,10 @@ public sealed class ConfigLoaderTests : IDisposable
     [Fact]
     public void Load_reports_an_explicit_access_failure_where_unix_permissions_are_enforced()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
 
         var path = Write("{\"schemaVersion\":1}");
         var originalMode = File.GetUnixFileMode(path);
@@ -257,7 +260,10 @@ public sealed class ConfigLoaderTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private string Write(string content)

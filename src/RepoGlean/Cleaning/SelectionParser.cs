@@ -42,7 +42,11 @@ public static class SelectionParser
             var rangeSeparator = part.IndexOf('-');
             if (rangeSeparator < 0)
             {
-                if (!TryReadIndex(part, itemCount, out var index)) return Failure($"Selection '{part}' is outside the available range 1-{itemCount}.");
+                if (!TryReadIndex(part, itemCount, out var index))
+                {
+                    return Failure($"Selection '{part}' is outside the available range 1-{itemCount}.");
+                }
+
                 selected.Add(index);
                 continue;
             }
@@ -56,7 +60,10 @@ public static class SelectionParser
 
             var lower = Math.Min(first, last);
             var upper = Math.Max(first, last);
-            for (var index = lower; index <= upper; index++) selected.Add(index);
+            for (var index = lower; index <= upper; index++)
+            {
+                selected.Add(index);
+            }
         }
 
         return Success(selected);

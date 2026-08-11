@@ -386,7 +386,10 @@ public sealed class RepositoryAuditorTests
             expected.Add(("cache\ttab", 3));
             expected.Add(("cache\nline", 4));
         }
-        foreach (var item in expected) repository.WriteBytes($"{item.Path}/payload.bin", item.Size);
+        foreach (var item in expected)
+        {
+            repository.WriteBytes($"{item.Path}/payload.bin", item.Size);
+        }
 
         var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
 
@@ -399,14 +402,21 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_accepts_nonempty_whitespace_only_unix_file_names()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "*\n");
         await repository.GitAsync("add", "-f", ".gitignore");
         await repository.GitAsync("commit", "--quiet", "-m", "ignore all paths");
         var expected = new[] { (Path: " ", Size: 3), (Path: "\t", Size: 5), (Path: "\n", Size: 7) };
-        foreach (var item in expected) repository.WriteBytes(item.Path, item.Size);
+        foreach (var item in expected)
+        {
+            repository.WriteBytes(item.Path, item.Size);
+        }
 
         var result = await AuditAsync(new GitClient(), [repository.Path], RuleCatalog.Create(RepoGleanConfig.Default));
 
@@ -419,7 +429,11 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_preserves_unix_backslashes_without_creating_artificial_dot_segments()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "cache*\n");
@@ -441,7 +455,11 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_revalidates_a_directory_replaced_by_a_link_during_git_classification()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "unknown\n");
@@ -481,7 +499,11 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_omits_a_directory_deleted_immediately_before_enumeration()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "unknown\n");
@@ -496,7 +518,11 @@ public sealed class RepositoryAuditorTests
             NullOperationProgress.Instance,
             (checkpoint, path) =>
             {
-                if (deleted || checkpoint != AuditCheckpoint.BeforeDirectoryEnumeration || path != target) return;
+                if (deleted || checkpoint != AuditCheckpoint.BeforeDirectoryEnumeration || path != target)
+                {
+                    return;
+                }
+
                 deleted = true;
                 Directory.Delete(target, recursive: true);
             });
@@ -517,7 +543,11 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_omits_a_file_deleted_immediately_before_measurement()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "unknown.bin\n");
@@ -532,7 +562,11 @@ public sealed class RepositoryAuditorTests
             NullOperationProgress.Instance,
             (checkpoint, path) =>
             {
-                if (deleted || checkpoint != AuditCheckpoint.BeforeFileMeasurement || path != target) return;
+                if (deleted || checkpoint != AuditCheckpoint.BeforeFileMeasurement || path != target)
+                {
+                    return;
+                }
+
                 deleted = true;
                 File.Delete(target);
             });
@@ -643,7 +677,11 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_batches_129_sibling_classifications_into_two_git_calls()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "artifact-*.bin\n");
@@ -674,7 +712,11 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_isolates_a_single_path_git_failure_without_suppressing_its_sibling()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "*.bin\n");
@@ -705,7 +747,11 @@ public sealed class RepositoryAuditorTests
     [Fact]
     public async Task Audit_recursively_isolates_malformed_provenance_without_suppressing_its_sibling()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "*.bin\n");
@@ -801,7 +847,11 @@ public sealed class RepositoryAuditorTests
     {
         public bool TryGetLastWriteTimeUtc(string path, out DateTimeOffset value)
         {
-            if (!string.Equals(path, root, StringComparison.Ordinal)) source.Cancel();
+            if (!string.Equals(path, root, StringComparison.Ordinal))
+            {
+                source.Cancel();
+            }
+
             value = DateTimeOffset.UnixEpoch;
             return true;
         }

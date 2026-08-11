@@ -41,7 +41,11 @@ public sealed class RepositoryScanner
         var results = new List<RepositoryScanResult>();
         var allWarnings = new List<OperationWarning>();
         var hasCandidateFilters = options.CategoryFilters.Count > 0 || options.Exclusions.Count > 0 || options.MinimumBytes is not null;
-        if (repositoryRoots.Count > 0) cancellationToken.ThrowIfCancellationRequested();
+        if (repositoryRoots.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
         var selectedRepositoryRoots = repositoryRoots
             .Select(Path.GetFullPath)
             .Distinct(RepositoryPathPolicy.PathComparer)
@@ -214,10 +218,17 @@ public sealed class RepositoryScanner
             foreach (var entry in entries.OrderBy(path => path, RepositoryPathPolicy.PathComparer))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase)) continue;
+                if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var relativePath = RepositoryPathPolicy.NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, entry));
                 var reservedQuarantine = RepositoryPathPolicy.IsReservedRootQuarantine(relativePath);
-                if (!reservedQuarantine && RepositoryPathPolicy.IsExcluded(entry, relativePath, options.Exclusions)) continue;
+                if (!reservedQuarantine && RepositoryPathPolicy.IsExcluded(entry, relativePath, options.Exclusions))
+                {
+                    continue;
+                }
 
                 FileAttributes attributes;
                 try
@@ -240,7 +251,11 @@ public sealed class RepositoryScanner
                     continue;
                 }
 
-                if (reservedQuarantine && RepositoryPathPolicy.IsExcluded(entry, relativePath, options.Exclusions)) continue;
+                if (reservedQuarantine && RepositoryPathPolicy.IsExcluded(entry, relativePath, options.Exclusions))
+                {
+                    continue;
+                }
+
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     if (activeRules.Any(rule => rule.Matches(relativePath)))
@@ -276,7 +291,10 @@ public sealed class RepositoryScanner
                     continue;
                 }
 
-                if (isDirectory) pendingDirectories.Push(entry);
+                if (isDirectory)
+                {
+                    pendingDirectories.Push(entry);
+                }
             }
         }
 
@@ -357,7 +375,11 @@ public sealed class RepositoryScanner
         {
             if (!ignoredPaths.Contains(match.RelativePath))
             {
-                if (match.IsDirectory) pendingDirectories.Push(match.AbsolutePath);
+                if (match.IsDirectory)
+                {
+                    pendingDirectories.Push(match.AbsolutePath);
+                }
+
                 continue;
             }
 
@@ -368,7 +390,11 @@ public sealed class RepositoryScanner
             }
 
             var analysis = analyzer.Analyze(match.AbsolutePath, repositoryRoot, cancellationToken);
-            foreach (var warning in analysis.Warnings) AddWarning(warnings, warning);
+            foreach (var warning in analysis.Warnings)
+            {
+                AddWarning(warnings, warning);
+            }
+
             if (analysis.IsSafe &&
                 analysis.Identity is not null &&
                 analysis.RepositoryIdentity is not null &&
@@ -443,7 +469,11 @@ public sealed class RepositoryScanner
 
     private static bool MatchesRepositoryFilter(string repositoryRoot, IReadOnlyList<string> filters)
     {
-        if (filters.Count == 0) return true;
+        if (filters.Count == 0)
+        {
+            return true;
+        }
+
         var name = Path.GetFileName(repositoryRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return filters.Any(filter =>
             string.Equals(filter, name, StringComparison.OrdinalIgnoreCase) ||

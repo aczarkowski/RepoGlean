@@ -9,11 +9,17 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
     {
         ArgumentNullException.ThrowIfNull(progressEvent);
         var line = Format(progressEvent);
-        if (line is null) return;
+        if (line is null)
+        {
+            return;
+        }
 
         lock (sync)
         {
-            if (disabled) return;
+            if (disabled)
+            {
+                return;
+            }
 
             try
             {
@@ -128,7 +134,10 @@ internal sealed class VerboseProgressRenderer(TextWriter writer) : IOperationPro
     private static string FormatCandidatePath(string? path)
     {
         var sanitized = ProgressText.Sanitize(path);
-        if (string.IsNullOrWhiteSpace(sanitized)) return "(unknown)";
+        if (string.IsNullOrWhiteSpace(sanitized))
+        {
+            return "(unknown)";
+        }
 
         var trimmed = sanitized.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var parent = Path.GetDirectoryName(trimmed);

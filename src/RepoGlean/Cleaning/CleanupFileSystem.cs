@@ -76,7 +76,11 @@ internal sealed class CleanupBoundaryInspector(ICleanupFileSystem fileSystem)
                      [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                      StringSplitOptions.RemoveEmptyEntries)))
         {
-            if (component.Length > 0) currentPath = Path.Combine(currentPath, component);
+            if (component.Length > 0)
+            {
+                currentPath = Path.Combine(currentPath, component);
+            }
+
             FileAttributes attributes;
             try
             {

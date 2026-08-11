@@ -27,7 +27,11 @@ public sealed class RepositoryPathPolicyTests
         var visible = RepositoryPathPolicy.CreateVisiblePathSet(paths, comparer);
         var afterConstruction = comparer.EqualityCallCount;
 
-        foreach (var path in paths) Assert.Contains(path, visible);
+        foreach (var path in paths)
+        {
+            Assert.Contains(path, visible);
+        }
+
         for (var index = 0; index < paths.Length; index++)
         {
             Assert.DoesNotContain($"missing/{index:D5}.bin", visible);

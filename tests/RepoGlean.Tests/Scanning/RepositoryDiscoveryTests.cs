@@ -148,7 +148,11 @@ public sealed class RepositoryDiscoveryTests
     [Fact]
     public async Task DiscoverAsync_continues_after_an_inaccessible_directory_where_supported()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var visible = await GitTestRepository.CreateAsync(temporary.GetPath("visible"));
         var inaccessible = temporary.GetPath("inaccessible");

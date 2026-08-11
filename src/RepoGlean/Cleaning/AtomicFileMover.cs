@@ -32,7 +32,10 @@ internal sealed class NativeAtomicFileMover : IAtomicFileMover
                         destinationPath,
                         LinuxRenameNoReplace) == 0
                     : OperatingSystem.IsMacOS() && RenameExclusiveMac(sourcePath, destinationPath, MacRenameExclusive) == 0;
-            if (succeeded) return;
+            if (succeeded)
+            {
+                return;
+            }
 
             var errorCode = Marshal.GetLastPInvokeError();
             throw new IOException(

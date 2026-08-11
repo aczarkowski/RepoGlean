@@ -37,41 +37,85 @@ public static class CliParser
                 switch (argument)
                 {
                     case "--repo":
-                        if (!TryReadValue(arguments, ref index, argument, out var repository, out var error)) return ParseResult<CliOptions>.Failure(error);
+                        if (!TryReadValue(arguments, ref index, argument, out var repository, out var error))
+                        {
+                            return ParseResult<CliOptions>.Failure(error);
+                        }
+
                         repositories.Add(repository);
                         break;
                     case "--category":
-                        if (!TryReadValue(arguments, ref index, argument, out var categoryValue, out error)) return ParseResult<CliOptions>.Failure(error);
-                        if (!TryParseCategory(categoryValue, out var category)) return ParseResult<CliOptions>.Failure($"Invalid category '{categoryValue}'.");
+                        if (!TryReadValue(arguments, ref index, argument, out var categoryValue, out error))
+                        {
+                            return ParseResult<CliOptions>.Failure(error);
+                        }
+
+                        if (!TryParseCategory(categoryValue, out var category))
+                        {
+                            return ParseResult<CliOptions>.Failure($"Invalid category '{categoryValue}'.");
+                        }
+
                         categories.Add(category);
                         break;
                     case "--exclude":
-                        if (!TryReadValue(arguments, ref index, argument, out var exclusion, out error)) return ParseResult<CliOptions>.Failure(error);
+                        if (!TryReadValue(arguments, ref index, argument, out var exclusion, out error))
+                        {
+                            return ParseResult<CliOptions>.Failure(error);
+                        }
+
                         exclusions.Add(exclusion);
                         break;
                     case "--min-size":
-                        if (!TryReadValue(arguments, ref index, argument, out var minimumSize, out error)) return ParseResult<CliOptions>.Failure(error);
+                        if (!TryReadValue(arguments, ref index, argument, out var minimumSize, out error))
+                        {
+                            return ParseResult<CliOptions>.Failure(error);
+                        }
+
                         if (minimumSize.Trim() == "0")
                         {
                             minimumBytes = 0;
                         }
                         else
                         {
-                            if (!ByteSizeParser.TryParse(minimumSize, out var parsedMinimumBytes)) return ParseResult<CliOptions>.Failure($"Invalid byte size '{minimumSize}'.");
+                            if (!ByteSizeParser.TryParse(minimumSize, out var parsedMinimumBytes))
+                            {
+                                return ParseResult<CliOptions>.Failure($"Invalid byte size '{minimumSize}'.");
+                            }
+
                             minimumBytes = parsedMinimumBytes;
                         }
                         break;
                     case "--free":
-                        if (!TryReadValue(arguments, ref index, argument, out var freeSize, out error)) return ParseResult<CliOptions>.Failure(error);
-                        if (!ByteSizeParser.TryParse(freeSize, out var parsedFreeBytes)) return ParseResult<CliOptions>.Failure($"Invalid byte size '{freeSize}'.");
+                        if (!TryReadValue(arguments, ref index, argument, out var freeSize, out error))
+                        {
+                            return ParseResult<CliOptions>.Failure(error);
+                        }
+
+                        if (!ByteSizeParser.TryParse(freeSize, out var parsedFreeBytes))
+                        {
+                            return ParseResult<CliOptions>.Failure($"Invalid byte size '{freeSize}'.");
+                        }
+
                         freeBytes = parsedFreeBytes;
                         break;
                     case "--format":
-                        if (!TryReadValue(arguments, ref index, argument, out var formatValue, out error)) return ParseResult<CliOptions>.Failure(error);
-                        if (!TryParseFormat(formatValue, out outputFormat)) return ParseResult<CliOptions>.Failure($"Invalid output format '{formatValue}'.");
+                        if (!TryReadValue(arguments, ref index, argument, out var formatValue, out error))
+                        {
+                            return ParseResult<CliOptions>.Failure(error);
+                        }
+
+                        if (!TryParseFormat(formatValue, out outputFormat))
+                        {
+                            return ParseResult<CliOptions>.Failure($"Invalid output format '{formatValue}'.");
+                        }
+
                         break;
                     case "--config":
-                        if (!TryReadValue(arguments, ref index, argument, out var path, out error)) return ParseResult<CliOptions>.Failure(error);
+                        if (!TryReadValue(arguments, ref index, argument, out var path, out error))
+                        {
+                            return ParseResult<CliOptions>.Failure(error);
+                        }
+
                         configPath = path;
                         break;
                     case "--all-drives": allDrives = true; break;

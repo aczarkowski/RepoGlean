@@ -12,7 +12,11 @@ internal static class ProgressText
     public static string DisplayPath(string? path)
     {
         var sanitized = Sanitize(path);
-        if (string.IsNullOrWhiteSpace(sanitized)) return "(unknown)";
+        if (string.IsNullOrWhiteSpace(sanitized))
+        {
+            return "(unknown)";
+        }
+
         var trimmed = sanitized.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var name = Path.GetFileName(trimmed);
         return string.IsNullOrWhiteSpace(name) ? sanitized : name;

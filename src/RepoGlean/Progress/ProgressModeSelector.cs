@@ -11,9 +11,21 @@ internal static class ProgressModeSelector
         bool verbose,
         bool noProgress)
     {
-        if (quiet) return ProgressMode.None;
-        if (verbose) return ProgressMode.Verbose;
-        if (format == OutputFormat.Json || noProgress || !isErrorInteractive) return ProgressMode.None;
+        if (quiet)
+        {
+            return ProgressMode.None;
+        }
+
+        if (verbose)
+        {
+            return ProgressMode.Verbose;
+        }
+
+        if (format == OutputFormat.Json || noProgress || !isErrorInteractive)
+        {
+            return ProgressMode.None;
+        }
+
         return ProgressMode.Interactive;
     }
 }

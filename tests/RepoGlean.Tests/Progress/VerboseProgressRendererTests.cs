@@ -21,7 +21,10 @@ public sealed class VerboseProgressRendererTests
             new OperationProgressEvent(ProgressEventKind.Completed, ProgressOperation.Scan, RepositoryCount: 18, CandidateCount: 23, EstimatedBytes: 1503238553, WarningCount: 1),
         };
 
-        foreach (var progressEvent in events) renderer.Report(progressEvent);
+        foreach (var progressEvent in events)
+        {
+            renderer.Report(progressEvent);
+        }
 
         AssertContainsInOrder(writer.ToString(),
             "Discovering repositories under /work...",

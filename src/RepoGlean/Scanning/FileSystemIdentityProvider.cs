@@ -41,8 +41,15 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider, 
     {
         try
         {
-            if (OperatingSystem.IsLinux()) return TryGetLinuxEntryKind(path, out kind, out error);
-            if (OperatingSystem.IsMacOS()) return TryGetMacEntryKind(path, out kind, out error);
+            if (OperatingSystem.IsLinux())
+            {
+                return TryGetLinuxEntryKind(path, out kind, out error);
+            }
+
+            if (OperatingSystem.IsMacOS())
+            {
+                return TryGetMacEntryKind(path, out kind, out error);
+            }
 
             var attributes = File.GetAttributes(path);
             kind = (attributes & FileAttributes.ReparsePoint) != 0
@@ -107,9 +114,20 @@ internal sealed class FileSystemIdentityProvider : IFileSystemIdentityProvider, 
         {
             var attributes = File.GetAttributes(path);
             FileSystemInfo info = (attributes & FileAttributes.Directory) != 0 ? new DirectoryInfo(path) : new FileInfo(path);
-            if (OperatingSystem.IsWindows()) return TryGetWindowsIdentity(path, attributes, info.LinkTarget, out identity, out error);
-            if (OperatingSystem.IsLinux()) return TryGetLinuxIdentity(path, attributes, info.LinkTarget, out identity, out error);
-            if (OperatingSystem.IsMacOS()) return TryGetMacIdentity(path, attributes, info.LinkTarget, out identity, out error);
+            if (OperatingSystem.IsWindows())
+            {
+                return TryGetWindowsIdentity(path, attributes, info.LinkTarget, out identity, out error);
+            }
+
+            if (OperatingSystem.IsLinux())
+            {
+                return TryGetLinuxIdentity(path, attributes, info.LinkTarget, out identity, out error);
+            }
+
+            if (OperatingSystem.IsMacOS())
+            {
+                return TryGetMacIdentity(path, attributes, info.LinkTarget, out identity, out error);
+            }
 
             identity = null;
             error = $"Stable filesystem identity is unavailable on {RuntimeInformation.OSDescription}.";

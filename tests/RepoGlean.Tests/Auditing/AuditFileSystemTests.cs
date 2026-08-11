@@ -56,7 +56,11 @@ public sealed class AuditFileSystemTests
     [Fact]
     public void TryInspect_classifies_a_symbolic_link_without_following_it()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var target = temporary.GetPath("target");
         Directory.CreateDirectory(target);

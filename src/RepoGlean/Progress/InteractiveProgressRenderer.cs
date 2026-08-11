@@ -66,7 +66,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
 
         lock (sync)
         {
-            if (disposed) return;
+            if (disposed)
+            {
+                return;
+            }
 
             snapshot = snapshot.Apply(progressEvent);
             if (awaitingReportAfterResume)
@@ -74,7 +77,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
                 awaitingReportAfterResume = false;
             }
 
-            if (rendered || paused || disabled) return;
+            if (rendered || paused || disabled)
+            {
+                return;
+            }
 
             rendered = Render();
         }
@@ -84,7 +90,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
     {
         lock (sync)
         {
-            if (disposed || paused) return;
+            if (disposed || paused)
+            {
+                return;
+            }
 
             paused = true;
             Clear();
@@ -97,7 +106,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
     {
         lock (sync)
         {
-            if (disposed || !paused) return;
+            if (disposed || !paused)
+            {
+                return;
+            }
 
             paused = false;
             awaitingReportAfterResume = true;
@@ -108,7 +120,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
     {
         lock (sync)
         {
-            if (disposeTask is not null) return new ValueTask(disposeTask);
+            if (disposeTask is not null)
+            {
+                return new ValueTask(disposeTask);
+            }
 
             disposed = true;
             refreshCancellation.Cancel();
@@ -125,7 +140,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
             {
                 lock (sync)
                 {
-                    if (disposed || paused || awaitingReportAfterResume || disabled) continue;
+                    if (disposed || paused || awaitingReportAfterResume || disabled)
+                    {
+                        continue;
+                    }
 
                     if (rendered)
                     {
@@ -187,7 +205,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
     private bool Render()
     {
         var status = snapshot.Format();
-        if (status.Length == 0) return false;
+        if (status.Length == 0)
+        {
+            return false;
+        }
 
         var content = $"{SpinnerFrames[spinnerIndex]} {status}";
         var optionalPath = ProgressText.Sanitize(snapshot.OptionalPath);
@@ -214,7 +235,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
     private string AppendOptionalPath(string content, string optionalPath)
     {
         var width = TryGetTerminalWidth();
-        if (width is null || width <= content.Length + OptionalPathSeparator.Length) return content;
+        if (width is null || width <= content.Length + OptionalPathSeparator.Length)
+        {
+            return content;
+        }
 
         var availablePathWidth = width.Value - content.Length - OptionalPathSeparator.Length;
         if (optionalPath.Length <= availablePathWidth)
@@ -222,7 +246,11 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
             return content + OptionalPathSeparator + optionalPath;
         }
 
-        if (availablePathWidth < 2) return content;
+        if (availablePathWidth < 2)
+        {
+            return content;
+        }
+
         return content + OptionalPathSeparator + optionalPath[..(availablePathWidth - 1)] + "…";
     }
 
@@ -240,7 +268,10 @@ internal sealed class InteractiveProgressRenderer : IOperationProgress
 
     private void Clear()
     {
-        if (writerDisabled || previousRenderedWidth == 0) return;
+        if (writerDisabled || previousRenderedWidth == 0)
+        {
+            return;
+        }
 
         try
         {

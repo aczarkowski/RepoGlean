@@ -396,7 +396,11 @@ public sealed class RepositoryScannerTests
     [Fact]
     public async Task ProcessRunner_cancellation_terminates_a_running_process_tree()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
         var stopwatch = Stopwatch.StartNew();
 
@@ -409,7 +413,11 @@ public sealed class RepositoryScannerTests
     [Fact]
     public async Task ScanAsync_warns_for_a_check_ignore_failure_and_continues_with_other_candidates()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write("project.csproj", "<Project />");
@@ -459,7 +467,11 @@ public sealed class RepositoryScannerTests
     [Fact]
     public async Task ScanAsync_batches_git_ignore_checks_at_scale()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "artifact-*/\n");
@@ -512,7 +524,11 @@ public sealed class RepositoryScannerTests
     [Fact]
     public async Task ScanAsync_preserves_a_unix_backslash_name_that_would_normalize_to_dot_segments()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "cache*\n");

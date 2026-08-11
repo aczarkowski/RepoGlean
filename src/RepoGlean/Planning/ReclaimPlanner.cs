@@ -11,7 +11,10 @@ public static class ReclaimPlanner
         DateTimeOffset referenceTimeUtc)
     {
         ArgumentNullException.ThrowIfNull(candidates);
-        if (requestedBytes <= 0) throw new ArgumentOutOfRangeException(nameof(requestedBytes));
+        if (requestedBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestedBytes));
+        }
 
         var ordered = candidates
             .Select(candidate => CreateFacts(candidate, referenceTimeUtc))
@@ -99,9 +102,15 @@ public static class ReclaimPlanner
         }
 
         if (newestWriteTimeUtc <= referenceTimeUtc.AddDays(-30))
+        {
             return ReclaimRecencyBand.Dormant;
+        }
+
         if (newestWriteTimeUtc <= referenceTimeUtc.AddDays(-7))
+        {
             return ReclaimRecencyBand.Stale;
+        }
+
         return ReclaimRecencyBand.RecentOrUnknown;
     }
 

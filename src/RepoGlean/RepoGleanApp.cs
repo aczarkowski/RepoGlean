@@ -386,7 +386,11 @@ public static class RepoGleanApp
                         UseColor: runtime.IsOutputInteractive && !options.NoColor));
             }
 
-            if (cleanup.IsInterrupted) return 130;
+            if (cleanup.IsInterrupted)
+            {
+                return 130;
+            }
+
             return report.Status == "success" ? 0 : 3;
         }
         catch (OperationCanceledException)
@@ -535,7 +539,11 @@ public static class RepoGleanApp
             await output.WriteAsync(prompt).ConfigureAwait(false);
             var value = await input.ReadLineAsync(cancellationToken).ConfigureAwait(false);
             var result = SelectionParser.Parse(value, itemCount, defaultIndices);
-            if (result.IsSuccess) return result.SelectedIndices;
+            if (result.IsSuccess)
+            {
+                return result.SelectedIndices;
+            }
+
             await output.WriteLineAsync($"Invalid selection: {result.Error}").ConfigureAwait(false);
         }
     }
@@ -897,7 +905,11 @@ public static class RepoGleanApp
     {
         var assembly = typeof(RepoGleanApp).Assembly;
         var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        if (!string.IsNullOrWhiteSpace(informational)) return informational.Split('+')[0];
+        if (!string.IsNullOrWhiteSpace(informational))
+        {
+            return informational.Split('+')[0];
+        }
+
         return assembly.GetName().Version?.ToString(3) ?? "2.3.0";
     }
 

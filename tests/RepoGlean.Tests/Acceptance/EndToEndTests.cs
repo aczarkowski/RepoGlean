@@ -566,10 +566,17 @@ public sealed class EndToEndTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         if (environment is not null)
         {
-            foreach (var pair in environment) startInfo.Environment[pair.Key] = pair.Value;
+            foreach (var pair in environment)
+            {
+                startInfo.Environment[pair.Key] = pair.Value;
+            }
         }
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start process '{executable}'.");
@@ -585,7 +592,10 @@ public sealed class EndToEndTests
         {
             try
             {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
             }
             catch (InvalidOperationException)
             {
@@ -600,7 +610,10 @@ public sealed class EndToEndTests
     {
         var executableName = OperatingSystem.IsWindows() ? "RepoGlean.exe" : "RepoGlean";
         var copiedAppHost = Path.Combine(AppContext.BaseDirectory, executableName);
-        if (File.Exists(copiedAppHost)) return copiedAppHost;
+        if (File.Exists(copiedAppHost))
+        {
+            return copiedAppHost;
+        }
 
         throw new FileNotFoundException("The RepoGlean apphost was not copied to the test output.", copiedAppHost);
     }
@@ -609,7 +622,10 @@ public sealed class EndToEndTests
     {
         for (var current = new DirectoryInfo(AppContext.BaseDirectory); current is not null; current = current.Parent)
         {
-            if (File.Exists(Path.Combine(current.FullName, "RepoGlean.slnx"))) return current.FullName;
+            if (File.Exists(Path.Combine(current.FullName, "RepoGlean.slnx")))
+            {
+                return current.FullName;
+            }
         }
 
         throw new DirectoryNotFoundException("Could not locate the RepoGlean repository root.");

@@ -376,9 +376,16 @@ public sealed record ReportDocument(
 
     private static long SaturatingNonNegativeDifference(long minuend, long subtrahend)
     {
-        if (minuend <= subtrahend) return 0;
+        if (minuend <= subtrahend)
+        {
+            return 0;
+        }
+
         if (subtrahend < 0 && minuend > long.MaxValue + subtrahend)
+        {
             return long.MaxValue;
+        }
+
         return minuend - subtrahend;
     }
 

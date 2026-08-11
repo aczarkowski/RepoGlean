@@ -284,7 +284,11 @@ internal sealed class QuarantineCleanup(
                 quarantineIdentity,
                 "Cleanup was interrupted before the candidate entered quarantine.",
                 out var quarantineRemoved);
-            if (quarantineRemoved) throw;
+            if (quarantineRemoved)
+            {
+                throw;
+            }
+
             throw new CleanupMutationInterruptedException(result, exception);
         }
         catch (Exception exception) when (moved && quarantineIdentity is not null && exception is
@@ -495,13 +499,20 @@ internal sealed class QuarantineCleanup(
         var visited = new HashSet<string>(PathComparer);
         foreach (var searchRoot in new[] { requestedRoot, Path.GetDirectoryName(repositoryRoot) })
         {
-            if (!string.IsNullOrWhiteSpace(searchRoot)) pending.Push(Path.GetFullPath(searchRoot));
+            if (!string.IsNullOrWhiteSpace(searchRoot))
+            {
+                pending.Push(Path.GetFullPath(searchRoot));
+            }
         }
 
         while (pending.Count > 0)
         {
             var current = pending.Pop();
-            if (!visited.Add(current)) continue;
+            if (!visited.Add(current))
+            {
+                continue;
+            }
+
             try
             {
                 var attributes = fileSystem.GetAttributes(current);

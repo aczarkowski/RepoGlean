@@ -66,7 +66,10 @@ internal sealed class CleanupAuthorityValidator(
             }
 
             var repositoryBoundaryError = boundaryInspector.Inspect(requestedRoot, repositoryRoot);
-            if (repositoryBoundaryError is not null) return CleanupAuthorityValidation.Failure(repositoryBoundaryError);
+            if (repositoryBoundaryError is not null)
+            {
+                return CleanupAuthorityValidation.Failure(repositoryBoundaryError);
+            }
 
             if (!identityProvider.TryGetIdentity(repositoryRoot, out var repositoryIdentity, out var repositoryIdentityError) ||
                 repositoryIdentity is null)
@@ -95,7 +98,10 @@ internal sealed class CleanupAuthorityValidator(
 
             var inspectedPath = candidatePresent ? candidatePath : Path.GetDirectoryName(candidatePath)!;
             var candidateBoundaryError = boundaryInspector.Inspect(repositoryRoot, inspectedPath);
-            if (candidateBoundaryError is not null) return CleanupAuthorityValidation.Failure(candidateBoundaryError);
+            if (candidateBoundaryError is not null)
+            {
+                return CleanupAuthorityValidation.Failure(candidateBoundaryError);
+            }
 
             FileSystemIdentity candidateIdentity;
             bool isDirectory;

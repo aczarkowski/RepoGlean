@@ -62,7 +62,11 @@ public static class ConfigLoader
         try
         {
             var json = File.ReadAllText(resolvedPath);
-            if (!ValidateRecognizedOccurrences(json, out var propertyError)) return ConfigLoadResult.Failure(propertyError);
+            if (!ValidateRecognizedOccurrences(json, out var propertyError))
+            {
+                return ConfigLoadResult.Failure(propertyError);
+            }
+
             config = JsonSerializer.Deserialize(json, JsonContext.RepoGleanConfig);
         }
         catch (JsonException exception)
@@ -84,7 +88,11 @@ public static class ConfigLoader
             return ConfigLoadResult.Failure($"Unable to read configuration: {exception.Message}");
         }
 
-        if (config is null) return ConfigLoadResult.Failure("Invalid JSON configuration: the document is empty.");
+        if (config is null)
+        {
+            return ConfigLoadResult.Failure("Invalid JSON configuration: the document is empty.");
+        }
+
         config = Normalize(config);
         return Validate(config, out var error) ? ConfigLoadResult.Success(config) : ConfigLoadResult.Failure(error);
     }

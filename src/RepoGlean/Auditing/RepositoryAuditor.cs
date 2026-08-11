@@ -83,7 +83,11 @@ public sealed class RepositoryAuditor
             throw new ArgumentOutOfRangeException(nameof(options), "The audit minimum size cannot be negative.");
         }
 
-        if (repositoryRoots.Count > 0) cancellationToken.ThrowIfCancellationRequested();
+        if (repositoryRoots.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
         var selectedRepositoryRoots = repositoryRoots
             .Select(AuditFileSystem.NormalizeRootPath)
             .Distinct(RepositoryPathPolicy.PathComparer)
@@ -349,10 +353,18 @@ public sealed class RepositoryAuditor
         foreach (var snapshot in orderedEntries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (string.Equals(snapshot.Name, ".git", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(snapshot.Name, ".git", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             var path = snapshot.AbsolutePath;
             var relativePath = RepositoryPathPolicy.NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, path));
-            if (RepositoryPathPolicy.IsExcluded(path, relativePath, options.Exclusions)) continue;
+            if (RepositoryPathPolicy.IsExcluded(path, relativePath, options.Exclusions))
+            {
+                continue;
+            }
+
             if (RepositoryPathPolicy.IsReservedRootQuarantine(relativePath))
             {
                 AddWarning(
@@ -362,10 +374,21 @@ public sealed class RepositoryAuditor
                 continue;
             }
 
-            if (visiblePaths.Contains(relativePath)) continue;
-            if (activeRules.Any(rule => rule.Matches(relativePath))) continue;
+            if (visiblePaths.Contains(relativePath))
+            {
+                continue;
+            }
 
-            if (!IsAuditableEntry(snapshot, warnings)) continue;
+            if (activeRules.Any(rule => rule.Matches(relativePath)))
+            {
+                continue;
+            }
+
+            if (!IsAuditableEntry(snapshot, warnings))
+            {
+                continue;
+            }
+
             if (snapshot.Kind == FileSystemEntryKind.Directory &&
                 !IsDirectoryOnRepositoryMount(snapshot.AbsolutePath, options, repositoryMount, warnings))
             {
@@ -384,7 +407,11 @@ public sealed class RepositoryAuditor
         foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!matches.TryGetValue(entry.RelativePath, out var match)) continue;
+            if (!matches.TryGetValue(entry.RelativePath, out var match))
+            {
+                continue;
+            }
+
             if (!TryRefreshEntry(entry, options, repositoryMount, warnings, out var refreshed) || refreshed is null)
             {
                 continue;
@@ -405,7 +432,11 @@ public sealed class RepositoryAuditor
 
     private static void CompleteDirectory(string repositoryRoot, DirectoryFrame frame)
     {
-        if (frame.Parent is null || frame.Aggregate.FileCount == 0) return;
+        if (frame.Parent is null || frame.Aggregate.FileCount == 0)
+        {
+            return;
+        }
+
         frame.Aggregate.ObserveTimestamp(frame.Entry.LastWriteTimeUtc);
         if (frame.Match is { IsIgnored: true } match)
         {
@@ -440,7 +471,11 @@ public sealed class RepositoryAuditor
             return false;
         }
 
-        if (!IsAuditableEntry(refreshed, warnings)) return false;
+        if (!IsAuditableEntry(refreshed, warnings))
+        {
+            return false;
+        }
+
         if (refreshed.Kind != entry.Snapshot.Kind)
         {
             AddWarning(warnings, refreshed.AbsolutePath, "Skipped audit entry that changed type during inspection.");
@@ -480,7 +515,11 @@ public sealed class RepositoryAuditor
         FileSystemMountIdentity? repositoryMount,
         List<OperationWarning> warnings)
     {
-        if (options.CrossMounts) return true;
+        if (options.CrossMounts)
+        {
+            return true;
+        }
+
         if (!volumeBoundary.TryGetMountIdentity(path, out var mount, out var error) || mount is null)
         {
             AddWarning(
@@ -490,7 +529,11 @@ public sealed class RepositoryAuditor
             return false;
         }
 
-        if (mount == repositoryMount) return true;
+        if (mount == repositoryMount)
+        {
+            return true;
+        }
+
         AddWarning(warnings, path, "Skipped path on a different filesystem mount or volume.");
         return false;
     }
@@ -501,7 +544,11 @@ public sealed class RepositoryAuditor
         AuditFileSystemEntry entry,
         GitIgnoreMatch match)
     {
-        if (!match.IsIgnored) return AuditAggregate.Empty;
+        if (!match.IsIgnored)
+        {
+            return AuditAggregate.Empty;
+        }
+
         var aggregate = new AuditAggregate
         {
             FileCount = 1,
@@ -546,14 +593,21 @@ public sealed class RepositoryAuditor
         List<OperationWarning> warnings,
         CancellationToken cancellationToken)
     {
-        if (batch.Count == 0) return;
+        if (batch.Count == 0)
+        {
+            return;
+        }
+
         try
         {
             var resolved = await git.GetIgnoreMatchesWithoutIndexAsync(
                 repositoryRoot,
                 batch.Select(entry => entry.RelativePath).ToArray(),
                 cancellationToken).ConfigureAwait(false);
-            foreach (var pair in resolved) matches.Add(pair.Key, pair.Value);
+            foreach (var pair in resolved)
+            {
+                matches.Add(pair.Key, pair.Value);
+            }
         }
         catch (GitCommandException) when (batch.Count > 1)
         {
@@ -579,7 +633,11 @@ public sealed class RepositoryAuditor
 
     private static bool MatchesRepositoryFilter(string repositoryRoot, IReadOnlyList<string> filters)
     {
-        if (filters.Count == 0) return true;
+        if (filters.Count == 0)
+        {
+            return true;
+        }
+
         var name = Path.GetFileName(repositoryRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return filters.Any(filter =>
             string.Equals(filter, name, StringComparison.OrdinalIgnoreCase) ||

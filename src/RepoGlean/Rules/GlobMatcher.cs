@@ -49,9 +49,18 @@ public static class GlobMatcher
                     expression.Append(".*");
                 }
             }
-            else if (character == '*') expression.Append("[^/]*");
-            else if (character == '?') expression.Append("[^/]");
-            else expression.Append(Regex.Escape(character.ToString()));
+            else if (character == '*')
+            {
+                expression.Append("[^/]*");
+            }
+            else if (character == '?')
+            {
+                expression.Append("[^/]");
+            }
+            else
+            {
+                expression.Append(Regex.Escape(character.ToString()));
+            }
         }
 
         expression.Append("\\z");

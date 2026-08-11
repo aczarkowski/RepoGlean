@@ -43,7 +43,10 @@ public static class HumanReportWriter
             {
                 output.WriteLine($"  {FormatBytes(finding.EstimatedBytes),-18} {finding.FileCount} files  {ProgressText.Sanitize(finding.RelativePath)}");
                 var provenance = FormatIgnoreProvenance(finding);
-                if (!string.IsNullOrEmpty(provenance)) output.WriteLine($"                     ignored by {provenance}");
+                if (!string.IsNullOrEmpty(provenance))
+                {
+                    output.WriteLine($"                     ignored by {provenance}");
+                }
             }
         }
 
@@ -70,7 +73,11 @@ public static class HumanReportWriter
                 foreach (var repository in report.Repositories)
                 {
                     output.WriteLine($"{FormatBytes(repository.EstimatedBytes),-13} {repository.Candidates.Count,10}  {repository.FileCount,5}  {repository.Root}");
-                    if (!options.Details && !options.Verbose) continue;
+                    if (!options.Details && !options.Verbose)
+                    {
+                        continue;
+                    }
+
                     foreach (var candidate in repository.Candidates)
                     {
                         output.WriteLine($"  {FormatBytes(candidate.EstimatedBytes),-11} {candidate.RelativePath} [{candidate.RuleId}; {candidate.Category}; preselected={candidate.Preselected.ToString().ToLowerInvariant()}]");
@@ -84,7 +91,10 @@ public static class HumanReportWriter
                 output.WriteLine($"Warnings: {report.Warnings.Count}");
                 if (options.Verbose)
                 {
-                    foreach (var warning in report.Warnings) output.WriteLine($"  {warning.Path}: {warning.Message}");
+                    foreach (var warning in report.Warnings)
+                    {
+                        output.WriteLine($"  {warning.Path}: {warning.Message}");
+                    }
                 }
             }
         }
@@ -232,10 +242,21 @@ public static class HumanReportWriter
         IReadOnlyList<ReportMessage> messages,
         bool includeDetails)
     {
-        if (messages.Count == 0) return;
+        if (messages.Count == 0)
+        {
+            return;
+        }
+
         output.WriteLine($"{label}: {messages.Count}");
-        if (!includeDetails) return;
-        foreach (var message in messages) output.WriteLine($"  {message.Path}: {message.Message}");
+        if (!includeDetails)
+        {
+            return;
+        }
+
+        foreach (var message in messages)
+        {
+            output.WriteLine($"  {message.Path}: {message.Message}");
+        }
     }
 
     public static string FormatBytes(long bytes)
@@ -261,9 +282,17 @@ public static class HumanReportWriter
         IReadOnlyList<ReportMessage> messages,
         bool includeDetails)
     {
-        if (messages.Count == 0) return;
+        if (messages.Count == 0)
+        {
+            return;
+        }
+
         output.WriteLine($"{label}: {messages.Count}");
-        if (!includeDetails) return;
+        if (!includeDetails)
+        {
+            return;
+        }
+
         foreach (var message in messages)
         {
             output.WriteLine($"  {ProgressText.Sanitize(message.Path)}: {ProgressText.Sanitize(message.Message)}");
@@ -272,7 +301,10 @@ public static class HumanReportWriter
 
     private static string? FormatIgnoreProvenance(AuditFindingReport finding)
     {
-        if (finding.IgnoreSource is null && finding.IgnoreSourceLine is null && finding.IgnorePattern is null) return null;
+        if (finding.IgnoreSource is null && finding.IgnoreSourceLine is null && finding.IgnorePattern is null)
+        {
+            return null;
+        }
 
         var source = finding.IgnoreSource is null ? "(unknown)" : ProgressText.Sanitize(finding.IgnoreSource);
         var sourceWithLine = finding.IgnoreSourceLine is null
@@ -284,9 +316,17 @@ public static class HumanReportWriter
 
     private static void WriteHeading(TextWriter output, string heading, bool useColor)
     {
-        if (useColor) output.Write("\u001b[1m");
+        if (useColor)
+        {
+            output.Write("\u001b[1m");
+        }
+
         output.Write(heading);
-        if (useColor) output.Write("\u001b[0m");
+        if (useColor)
+        {
+            output.Write("\u001b[0m");
+        }
+
         output.WriteLine();
     }
 }

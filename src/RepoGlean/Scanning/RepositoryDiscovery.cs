@@ -33,7 +33,10 @@ internal sealed class SystemDriveRootProvider : IDriveRootProvider
             var drivePath = drive.Name;
             try
             {
-                if (drive.IsReady && drive.DriveType == DriveType.Fixed) roots.Add(drive.RootDirectory.FullName);
+                if (drive.IsReady && drive.DriveType == DriveType.Fixed)
+                {
+                    roots.Add(drive.RootDirectory.FullName);
+                }
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
             {
@@ -170,7 +173,10 @@ public sealed class RepositoryDiscovery
             ProgressEventKind.DiscoveryStarted,
             operation,
             Roots: Array.AsReadOnly(requestedRoots.ToArray())));
-        foreach (var warning in driveWarnings) AddWarning(warnings, warning);
+        foreach (var warning in driveWarnings)
+        {
+            AddWarning(warnings, warning);
+        }
 
         foreach (var root in requestedRoots)
         {
@@ -202,7 +208,11 @@ public sealed class RepositoryDiscovery
                     continue;
                 }
 
-                if (!TryGetAttributes(path, warnings, out var attributes)) continue;
+                if (!TryGetAttributes(path, warnings, out var attributes))
+                {
+                    continue;
+                }
+
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     var auditWillClassifyRepositoryLink = operation == ProgressOperation.Audit &&
@@ -283,7 +293,11 @@ public sealed class RepositoryDiscovery
     {
         foreach (var exclusion in implicitExclusions)
         {
-            if (!IsSameOrDescendant(path, exclusion)) continue;
+            if (!IsSameOrDescendant(path, exclusion))
+            {
+                continue;
+            }
+
             return !IsSameOrDescendant(requestedRoot, exclusion);
         }
 
@@ -297,7 +311,11 @@ public sealed class RepositoryDiscovery
         {
             if (Path.IsPathRooted(exclusion))
             {
-                if (IsSameOrDescendant(path, exclusion)) return true;
+                if (IsSameOrDescendant(path, exclusion))
+                {
+                    return true;
+                }
+
                 continue;
             }
 
@@ -382,7 +400,10 @@ public sealed class RepositoryDiscovery
     private static void AddSpecialFolder(List<string> paths, Environment.SpecialFolder folder)
     {
         var path = Environment.GetFolderPath(folder);
-        if (!string.IsNullOrWhiteSpace(path)) paths.Add(path);
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            paths.Add(path);
+        }
     }
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;

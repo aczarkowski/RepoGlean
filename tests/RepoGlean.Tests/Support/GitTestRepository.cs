@@ -60,10 +60,17 @@ internal sealed class GitTestRepository
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         if (environment is not null)
         {
-            foreach (var pair in environment) startInfo.Environment[pair.Key] = pair.Value;
+            foreach (var pair in environment)
+            {
+                startInfo.Environment[pair.Key] = pair.Value;
+            }
         }
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {executable}.");

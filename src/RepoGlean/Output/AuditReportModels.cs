@@ -114,12 +114,19 @@ public sealed record AuditReportDocument(
 
     private static string? NormalizeIgnoreSource(string repositoryRoot, string? source)
     {
-        if (string.IsNullOrEmpty(source) || !Path.IsPathRooted(source)) return source;
+        if (string.IsNullOrEmpty(source) || !Path.IsPathRooted(source))
+        {
+            return source;
+        }
 
         var normalizedRepositoryRoot = Path.GetFullPath(repositoryRoot);
         var normalizedSource = Path.GetFullPath(source);
         var relativeSource = Path.GetRelativePath(normalizedRepositoryRoot, normalizedSource);
-        if (!IsOutsideRepository(relativeSource)) return relativeSource;
+        if (!IsOutsideRepository(relativeSource))
+        {
+            return relativeSource;
+        }
+
         return normalizedSource;
     }
 

@@ -64,7 +64,11 @@ public sealed class BoundaryAwareDeleterTests
 
         public bool TryGetIdentity(string path, out FileSystemIdentity? identity, out string? error)
         {
-            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null) return false;
+            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null)
+            {
+                return false;
+            }
+
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(childPath), StringComparison.Ordinal))
             {
                 identity = identity with { MountId = "injected-child-mount" };

@@ -379,8 +379,14 @@ public sealed class CleanupServiceTests
             foreach (var entry in Directory.GetFileSystemEntries(relocatedRepository))
             {
                 var destination = Path.Combine(fixture.Repository.Path, Path.GetFileName(entry));
-                if (Directory.Exists(entry)) Directory.Move(entry, destination);
-                else File.Move(entry, destination);
+                if (Directory.Exists(entry))
+                {
+                    Directory.Move(entry, destination);
+                }
+                else
+                {
+                    File.Move(entry, destination);
+                }
             }
         });
 
@@ -418,7 +424,10 @@ public sealed class CleanupServiceTests
     [Fact]
     public async Task Git_becoming_unavailable_after_ownership_recovers_and_reports_the_candidate()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
 
         using var fixture = await CleanupFixture.CreateAsync();
         var candidate = await fixture.ScanSingleAsync();
@@ -466,7 +475,11 @@ public sealed class CleanupServiceTests
         var laterCandidate = Assert.Single(candidates, candidate => candidate.RelativePath == "src/obj");
         var observer = new TestMutationObserver(beforeMovedIdentityCheck: (candidate, _, _) =>
         {
-            if (candidate != firstCandidate) return;
+            if (candidate != firstCandidate)
+            {
+                return;
+            }
+
             fixture.Repository.GitAsync("rm", "--quiet", "project.csproj").GetAwaiter().GetResult();
             Directory.CreateDirectory(candidate.AbsolutePath);
         });
@@ -1066,8 +1079,16 @@ public sealed class CleanupServiceTests
             repository.Write("project.csproj", "<Project />");
             repository.Write(".gitignore", "obj/\nsrc/obj/\ntests/obj/\n");
             repository.WriteBytes("obj/artifact.bin", 5);
-            if (includeSecondCandidate) repository.WriteBytes("src/obj/artifact.bin", 7);
-            if (includeThirdCandidate) repository.WriteBytes("tests/obj/artifact.bin", 9);
+            if (includeSecondCandidate)
+            {
+                repository.WriteBytes("src/obj/artifact.bin", 7);
+            }
+
+            if (includeThirdCandidate)
+            {
+                repository.WriteBytes("tests/obj/artifact.bin", 9);
+            }
+
             await repository.CommitAllAsync();
             return new CleanupFixture(temporary, repository, RuleCatalog.Create(RepoGleanConfig.Default));
         }
@@ -1203,7 +1224,11 @@ public sealed class CleanupServiceTests
                 return false;
             }
 
-            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null) return false;
+            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null)
+            {
+                return false;
+            }
+
             if (IsQuarantineRoot(path) && failure == EarlyQuarantineFailure.MountMismatch)
             {
                 identity = identity with { VolumeId = identity.VolumeId + 1, MountId = "injected-other-mount" };
@@ -1227,7 +1252,11 @@ public sealed class CleanupServiceTests
 
         public bool TryGetIdentity(string path, out FileSystemIdentity? identity, out string? error)
         {
-            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null) return false;
+            if (!inner.TryGetIdentity(path, out identity, out error) || identity is null)
+            {
+                return false;
+            }
+
             if (ForeignMountPath is not null &&
                 string.Equals(Path.GetFullPath(path), Path.GetFullPath(ForeignMountPath), StringComparison.Ordinal))
             {
@@ -1355,7 +1384,11 @@ public sealed class CleanupServiceTests
             {
                 throw new IOException("Injected quarantine cleanup failure.");
             }
-            if (string.Equals(path, failingPath, StringComparison.Ordinal)) throw new IOException("Injected deletion failure.");
+            if (string.Equals(path, failingPath, StringComparison.Ordinal))
+            {
+                throw new IOException("Injected deletion failure.");
+            }
+
             inner.DeleteDirectory(path);
             cancelAfterDirectoryDelete?.Cancel();
         }

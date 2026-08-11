@@ -8,14 +8,21 @@ public sealed class GitClientTests
     [Fact]
     public async Task Verbose_ignore_matches_accept_nonempty_whitespace_only_unix_paths()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "*\n");
         await repository.GitAsync("add", "-f", ".gitignore");
         await repository.GitAsync("commit", "--quiet", "-m", "ignore all paths");
         string[] paths = [" ", "\t", "\n"];
-        foreach (var path in paths) repository.Write(path, "ignored");
+        foreach (var path in paths)
+        {
+            repository.Write(path, "ignored");
+        }
 
         var matches = await new GitClient().GetIgnoreMatchesAsync(repository.Path, paths);
 
@@ -133,7 +140,10 @@ public sealed class GitClientTests
         Assert.Equal("cache*/", unicode.Pattern);
         Assert.Equal("cache-λ", unicode.Path);
         Assert.False(matches["visible/file.bin"].IsIgnored);
-        if (!OperatingSystem.IsWindows()) Assert.True(matches["cache\nline"].IsIgnored);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.True(matches["cache\nline"].IsIgnored);
+        }
     }
 
     [Fact]
@@ -243,7 +253,11 @@ public sealed class GitClientTests
     [Fact]
     public async Task Scalar_ignore_authority_preserves_unix_backslashes_that_surround_dot_text()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "cache*\n");

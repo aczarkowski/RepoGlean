@@ -22,7 +22,11 @@ public sealed class AuditCommandTests
     [Fact]
     public async Task Audit_refuses_a_repository_root_link_with_a_trailing_separator_after_discovery()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await CreateAuditRepositoryAsync(temporary.GetPath("repository"), "unknown", 23);
         var link = temporary.GetPath("repository-link");
@@ -228,7 +232,11 @@ public sealed class AuditCommandTests
     [Fact]
     public async Task Audit_silently_carves_a_tracked_symbolic_link_and_remains_successful()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         var external = temporary.GetPath("external");
@@ -249,7 +257,11 @@ public sealed class AuditCommandTests
     [Fact]
     public async Task Audit_silently_carves_a_classified_ignored_symbolic_link_and_remains_successful()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write("project.csproj", "<Project />");
@@ -272,7 +284,11 @@ public sealed class AuditCommandTests
     [Fact]
     public async Task Audit_warns_for_an_unclassified_ignored_symbolic_link_and_remains_partial()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "unknown\n");
@@ -297,7 +313,11 @@ public sealed class AuditCommandTests
     [Fact]
     public async Task Audit_reports_whitespace_only_unix_paths_without_an_uncaught_argument_failure()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using var temporary = new TemporaryDirectory();
         var repository = await GitTestRepository.CreateAsync(temporary.GetPath("repo"));
         repository.Write(".gitignore", "*\n");

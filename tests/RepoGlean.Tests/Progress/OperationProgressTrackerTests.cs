@@ -104,7 +104,11 @@ public sealed class OperationProgressTrackerTests
                 Message: "Second repository interrupted."),
         };
 
-        foreach (var progressEvent in events) tracker.Report(progressEvent);
+        foreach (var progressEvent in events)
+        {
+            tracker.Report(progressEvent);
+        }
+
         var interrupted = tracker.CreateReadOnlyInterruptedEvent(operation);
 
         Assert.Equal(events, inner.Events);

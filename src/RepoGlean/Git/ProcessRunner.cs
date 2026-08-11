@@ -62,7 +62,10 @@ internal sealed class ProcessRunner
             {
                 try
                 {
-                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
                 }
                 catch (InvalidOperationException)
                 {
@@ -101,10 +104,26 @@ internal sealed class ProcessRunner
             StandardErrorEncoding = utf8WithoutPreamble,
             CreateNoWindow = true,
         };
-        if (redirectStandardInput) startInfo.StandardInputEncoding = utf8WithoutPreamble;
-        if (!string.IsNullOrWhiteSpace(workingDirectory)) startInfo.WorkingDirectory = workingDirectory;
-        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
-        foreach (var pair in environment) startInfo.Environment[pair.Key] = pair.Value;
+        if (redirectStandardInput)
+        {
+            startInfo.StandardInputEncoding = utf8WithoutPreamble;
+        }
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            startInfo.WorkingDirectory = workingDirectory;
+        }
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        foreach (var pair in environment)
+        {
+            startInfo.Environment[pair.Key] = pair.Value;
+        }
+
         return startInfo;
     }
 }

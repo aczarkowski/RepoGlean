@@ -910,7 +910,7 @@ public static class RepoGleanApp
             return informational.Split('+')[0];
         }
 
-        return assembly.GetName().Version?.ToString(3) ?? "2.3.0";
+        return assembly.GetName().Version?.ToString(3) ?? "2.3.1";
     }
 
     private static void WriteHelp(TextWriter output)

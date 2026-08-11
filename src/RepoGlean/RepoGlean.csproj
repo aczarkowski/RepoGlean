@@ -9,7 +9,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <Deterministic>true</Deterministic>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Version>2.3.0</Version>
+    <Version>2.3.1</Version>
   </PropertyGroup>
 
 </Project>
